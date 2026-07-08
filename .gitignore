@@ -1,0 +1,24 @@
+# backtesting files
+*.py
+backtesting/*
+backtesting/
+/backtesting
+*.csv
+bars/
+bars/*
+*.pkl
+*.xlsx
+*.pdf
+*.docx
+poetry.lock
+README.md
+pyproject.toml
+
+# sensitive info
+
+*.env
+.env
+
+# strategy files
+strategy/.env
+strategy/*.env
