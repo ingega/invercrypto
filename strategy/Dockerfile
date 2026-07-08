@@ -1,31 +1,36 @@
 # Use a lightweight, official Python runtime as a parent image
-FROM python:3.11-slim
+# ==========================================
+# STAGE 1: The Builder (Heavy but Disposable)
+# ==========================================
+FROM python:3.11-slim AS builder
 
-# Set system-level environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    TZ=UTC
+WORKDIR /build
 
-# Set the working directory inside the container
-WORKDIR /app
-
-# Install system dependencies (build-essential for potential C-based math packages later)
+# Install basic build tools needed for heavy wheel compilation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements or package lists first to leverage Docker layer caching
+# Copy requirements matrix 
 COPY strategy/requirements.txt .
 
-# Install Python requirements
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Compile and isolate wheels to a local directory
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Explicitly build our strategy folder architecture inside the container
-RUN mkdir -p strategy/common_files strategy/tangent_fomo config utils data
+# ==========================================
+# STAGE 2: The Production Runtime (Ultra-Lean)
+# ==========================================
+FROM python:3.11-alpine
 
-# Copy the rest of our application code into the container
-COPY . .
+WORKDIR /app
+
+# Copy only the pre-compiled packages from Stage 1
+COPY --from=builder /root/.local /root/.local
+COPY strategy/ .
+
+# Sync paths to utilize isolated user packages
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
 
 # As a placeholder/sanity check for Phase 1, we will just print a system readiness statement
 CMD ["python", "-c", "print('🚀 Invercrypto Engine Live on EC2. Architecture Verified!')"]

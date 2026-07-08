@@ -21,7 +21,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
           script: |
-            echo "走 Firing up the live deployment pipeline on EC2..."
+            echo "Firing up the live deployment pipeline on EC2..."
             
             TARGET_DIR="/home/ec2-user/invercrypto"
             
@@ -64,3 +64,17 @@ jobs:
             echo "🦅 Live Engine online! Sampling execution diagnostics:"
             sleep 3
             docker logs --tail 20 invercrypto-live
+
+            # =========================================================================
+            # 🧹 AUTOMATED PRODUCTION DISK CLEANUP PROTOCOL
+            # =========================================================================
+            echo "🧹 Commencing disk recovery layer..."
+            
+            # Purge the intermediate build logs and unused multi-stage caching layers
+            docker builder prune -f
+            
+            # Wipe out old untagged (<none>:<none>) image layers orphaned by the new build
+            docker image prune -f
+            
+            echo "📊 Current System Storage Telemetry:"
+            docker system df
