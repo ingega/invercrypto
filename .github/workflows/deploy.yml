@@ -3,7 +3,7 @@ name: Deploy Invercrypto 2.0 Engine to AWS EC2
 on:
   push:
     branches:
-      - main  # Verify if your default repo branch is named 'main' or 'master'
+      - main
 
 jobs:
   deploy:
@@ -23,13 +23,21 @@ jobs:
           script: |
             echo "🏎️ Firing up the live deployment pipeline on EC2..."
             
-            # Absolute target directory definition
             TARGET_DIR="/home/ec2-user/invercrypto"
             
-            # Check if directory exists; clone if fresh, pull if existing
-            if [ ! -d "$TARGET_DIR" ]; then
-              echo "Creating absolute project directory..."
-              git clone git@github.com:${{ github.repository }}.git $TARGET_DIR
+            # Smart Directory Guard: Check if it's a valid tracked git tree
+            if [ ! -d "$TARGET_DIR/.git" ]; then
+              echo "🔄 Folder is fresh or untracked. Initializing clean clone sequence..."
+              
+              # If user manually created the folder for the .env, we clone into a temp directory and sync it
+              rm -rf /tmp/invercrypto_clone
+              git clone https://github.com/${{ github.repository }}.git /tmp/invercrypto_clone
+              
+              # Create target directory if it doesn't exist, then copy files without overwriting your manual .env
+              mkdir -p $TARGET_DIR
+              cp -r /tmp/invercrypto_clone/. $TARGET_DIR/
+              rm -rf /tmp/invercrypto_clone
+              
               cd $TARGET_DIR
             else
               cd $TARGET_DIR
@@ -38,7 +46,7 @@ jobs:
               git pull origin main
             fi
 
-            # Local Environment Variable Sheet Guard
+            # Double-check environment variables sheet presence
             if [ ! -f ".env" ]; then
               echo "⚠️ WARNING: Live production .env file missing. Constructing placeholder..."
               touch .env
