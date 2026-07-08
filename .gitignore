@@ -1,24 +1,29 @@
-# backtesting files
+# 1. Ignore ALL Python files in the root folder and loose directories by default
 *.py
-backtesting/*
+
+# 2. Allow/Track all python files specifically inside our live strategy package
+!strategy/**/*.py
+
+# 3. Ignore all research data, spreadsheets, and optimization files
+*.xlsx
+*.csv
+*.pkl
+*.docx
+*.pdf
+bars/
 backtesting/
 /backtesting
-*.csv
-bars/
-bars/*
-*.pkl
-*.xlsx
-*.pdf
-*.docx
 poetry.lock
-README.md
 pyproject.toml
 
-# sensitive info
-
-*.env
+# 4. Critical security boundary for cloud deployment
 .env
-
-# strategy files
+*.env
 strategy/.env
 strategy/*.env
+
+# 5. Local database and cache persistence
+db.sqlite
+data/
+__pycache__/
+*.pyc
