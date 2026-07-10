@@ -45,8 +45,14 @@ jobs:
             # Environment file fallback guard
             if [ ! -f ".env" ]; then touch .env; fi
 
+            # =========================================================================
+            # 🛡️ PERSISTENT DATA LOGS DIRECTORY GUARD
+            # =========================================================================
+            echo "📁 Ensuring persistent storage directory exists..."
+            mkdir -p $TARGET_DIR/data
+            chmod -R 777 $TARGET_DIR/data
+
             echo "📦 Commencing Docker image compilation layers..."
-            # -f targets the nested Dockerfile, while '.' keeps the repository root as the execution context
             docker build -f strategy/Dockerfile -t invercrypto-engine .
             
             echo "🛑 Clearing stale container processes..."
@@ -58,7 +64,7 @@ jobs:
               --name invercrypto-live \
               --restart unless-stopped \
               --env-file .env \
-              -v /home/ec2-user/invercrypto/data:/app/data \
+              -v $TARGET_DIR/data:/app/data \
               invercrypto-engine
 
             echo "🦅 Live Engine online! Sampling execution diagnostics:"
@@ -66,14 +72,12 @@ jobs:
             docker logs --tail 20 invercrypto-live
 
             # =========================================================================
-            # 🧹 AUTOMATED PRODUCTION DISK CLEANUP PROTOCOL
+            # 🧹 SAFE PRODUCTION DISK CLEANUP PROTOCOL
             # =========================================================================
             echo "🧹 Commencing disk recovery layer..."
             
-            # Purge the intermediate build logs and unused multi-stage caching layers
+            # Safe standard prune to clear building leftovers without a complete purge
             docker builder prune -f
-            
-            # Wipe out old untagged (<none>:<none>) image layers orphaned by the new build
             docker image prune -f
             
             echo "📊 Current System Storage Telemetry:"

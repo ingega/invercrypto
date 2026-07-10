@@ -14,7 +14,9 @@ bars/
 backtesting/
 /backtesting
 poetry.lock
-pyproject.toml
+pyproject.
+# logs
+local_data/
 
 # 4. Critical security boundary for cloud deployment
 .env

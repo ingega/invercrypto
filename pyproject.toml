@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "invercrypto-bot"
+version = "2.0.0"
+description = "High-performance automated quantitative trading bot for Binance"
+authors = ["Edmundo Garcia <invercrypto@quant.internal>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+pandas = "^3.0.3"
+python-binance = "^1.0.37"
+pyarrow = "^24.0.0"
+openpyxl = "^3.1.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,8 +1,6 @@
-from pathlib import Path
 import time
-from datetime import datetime
 from utils.timing import wait_for_time_trigger
-from .filter import scan_tangent_opportunities
+from tangent.filter import scan_tangent_opportunities
 # logger
 from common_files.logger import get_logger
 
