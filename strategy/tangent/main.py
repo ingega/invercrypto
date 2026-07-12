@@ -148,8 +148,6 @@ async def main_engine_loop():
             logger.info(f"⚠️ [SCAN COMPLETE] - there was no bets found")
         # 3. now, let's scan for new opportunities
         opportunities = scan_tangent_opportunities()
-        # debug
-        logger.info(f"after the scan there's these oppor: {opportunities}")
         if not opportunities:
             logger.info("🤷 Sweep complete. Zero opportunities matched current boundaries.")
         else:
