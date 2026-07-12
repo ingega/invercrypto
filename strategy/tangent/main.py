@@ -199,8 +199,8 @@ async def main_engine_loop():
     
     while True:
         # 1. Yield thread control until the exact pre-emptive offset window is hit
-        # await wait_for_time_trigger(target_hour=0,
-          #  target_minute=TARGET_MIN, target_second=TARGET_SEC)
+        await wait_for_time_trigger(target_hour=0,
+            target_minute=TARGET_MIN, target_second=TARGET_SEC)
         # 2. Fire the bet results, for that we need the actual prices
         actual_prices = {}
         actual_bets = load_json_file(BET_FILE)
