@@ -14,7 +14,7 @@ bars/
 backtesting/
 /backtesting
 poetry.lock
-pyproject.
+pyproject.toml
 # logs
 local_data/
 # data and config files

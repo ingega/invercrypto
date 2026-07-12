@@ -12,14 +12,10 @@ from tangent.filter import scan_tangent_opportunities
 from common_files.binance import get_actual_prices
 # logger
 from common_files.logger import get_logger
+# json and config files
+from common_files.paths import *
 
 logger = get_logger(__name__)
-
-# File paths within our container environment
-BET_FILE = "actual_bets.json"
-LOG_FILE = "completed_operations.csv"
-CONFIG_FILE = "config.json"
-TICKERS_FILE = "tickers.json"
 
 # I/O files functions
 def load_json_file(filepath, default_factory=dict):
@@ -36,8 +32,8 @@ def save_json_file(filepath, data):
         json.dump(data, f, indent=4)
 
 def init_csv_log():
-    if not os.path.exists(LOG_FILE):
-        with open(LOG_FILE, mode="w", newline="") as f:
+    if not os.path.exists(OPERATIONS_FILE):
+        with open(OPERATIONS_FILE, mode="w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "entry_date", "ticker", "side", "entry_price", 
@@ -98,7 +94,7 @@ def check_active_bets_resolution(actual_bets: Optional[list],
             else:
                 exit_price = sl
             # bets resolved going to csv files
-            with open(LOG_FILE, mode="a", newline="") as f:
+            with open(OPERATIONS_FILE, mode="a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([
                     bet.get("entry_date", current_time_str),
@@ -192,7 +188,7 @@ def build_bet_payload(item: dict) -> dict:
 async def main_engine_loop():
     logger.info("🤖 Invercrypto 2.0 Live Simulator Pipeline Initialize.")
     config = load_json_file(CONFIG_FILE)
-    tickers = load_json_file(TICKERS_FILE)['selected_tickers']
+    tickers = load_json_file(TICKERS_FILE)["selected_tickers"]
     # Configure variables for top-of-the-hour pre-emption (e.g., 3 seconds before close)
     TARGET_MIN = 59
     TARGET_SEC = 55  # 5 seconds is enough time
