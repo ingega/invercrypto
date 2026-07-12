@@ -1,6 +1,4 @@
 # invercrypto/strategy/tangent/main.py
-import os
-import json
 import csv
 import asyncio
 from datetime import datetime
@@ -16,29 +14,6 @@ from common_files.logger import get_logger
 from common_files.paths import *
 
 logger = get_logger(__name__)
-
-# I/O files functions
-def load_json_file(filepath, default_factory=dict):
-    if not os.path.exists(filepath):
-        return default_factory()
-    try:
-        with open(filepath, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        return default_factory()
-
-def save_json_file(filepath, data):
-    with open(filepath, "w") as f:
-        json.dump(data, f, indent=4)
-
-def init_csv_log():
-    if not os.path.exists(OPERATIONS_FILE):
-        with open(OPERATIONS_FILE, mode="w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "entry_date", "ticker", "side", "entry_price", 
-                "tp_price", "sl_price", "exit_date", "exit_price", "outcome"
-            ])
 
 # check direct bet function
 def check_active_bets_resolution(actual_bets: Optional[list], 
@@ -121,46 +96,6 @@ def check_active_bets_resolution(actual_bets: Optional[list],
     
     return actual_bet_file
 
-# scan new opportunities
-def process_new_opportunities(opportunities, actual_bets, config):
-    """
-    Processes the array returned by the hourly scanner.
-    Filters out assets that are already locked in a direct bet.
-    """
-    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    win_mult = config.get("win_multiplier", 0.02)
-    loss_mult = config.get("loss_multiplier", 0.02)
-    
-    for opp in opportunities:
-        ticker = opp["ticker"]
-        side = opp["side"]
-        entry_price = opp["price"]
-        
-        # 🛡️ Structural Guard Rule #4: Avoid double-tracking active positions
-        if ticker in actual_bets:
-            logger.info(f"Skipping opportunity for {ticker}. Already actively tracking a position.")
-            continue
-            
-        # Calculate asymmetric/symmetric targets based on parameters
-        if side == "BUY":
-            win_price = entry_price * (1.0 + win_mult)
-            loss_price = entry_price * (1.0 - loss_mult)
-        else:  # SELL
-            win_price = entry_price * (1.0 - win_mult)
-            loss_price = entry_price * (1.0 + loss_mult)
-            
-        # Build the structured dictionary tracking row
-        actual_bets[ticker] = {
-            "entry_date": current_time_str,
-            "entry_price": entry_price,
-            "side": side,
-            "tp": win_price,
-            "sl": loss_price
-        }
-        logger.info(f"🚀 NEW DIRECT BET OPENED: {ticker} [{side}] at {entry_price}")
-        
-    return actual_bets
-
 # aux function to build bet payload
 def build_bet_payload(item: dict) -> dict:
     config = load_json_file(CONFIG_FILE)
@@ -190,8 +125,8 @@ async def main_engine_loop():
     config = load_json_file(CONFIG_FILE)
     tickers = load_json_file(TICKERS_FILE)["selected_tickers"]
     # Configure variables for top-of-the-hour pre-emption (e.g., 3 seconds before close)
-    TARGET_MIN = 59
-    TARGET_SEC = 55  # 5 seconds is enough time
+    TARGET_MIN = config["target_minutes"]
+    TARGET_SEC = config["target_seconds"]
     
     while True:
         # 1. Yield thread control until the exact pre-emptive offset window is hit
@@ -213,6 +148,8 @@ async def main_engine_loop():
             logger.info(f"⚠️ [SCAN COMPLETE] - there was no bets found")
         # 3. now, let's scan for new opportunities
         opportunities = scan_tangent_opportunities()
+        # debug
+        logger.info(f"after the scan there's these oppor: {opportunities}")
         if not opportunities:
             logger.info("🤷 Sweep complete. Zero opportunities matched current boundaries.")
         else:
