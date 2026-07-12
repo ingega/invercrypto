@@ -2,5 +2,6 @@
   "separation": 60,
   "threshold": 0.02,
   "leverage": 3,
-  "bet_percentage": 0.07
+  "direct_bet_percentage": 0.05,
+  "timeframe": "1h"
 }

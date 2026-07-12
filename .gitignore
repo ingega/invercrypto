@@ -17,6 +17,11 @@ poetry.lock
 pyproject.
 # logs
 local_data/
+# data and config files
+*.json
+strategy/*.json
+strategy/tangent/*.json
+strategy/tangent/*.csv
 
 # 4. Critical security boundary for cloud deployment
 .env

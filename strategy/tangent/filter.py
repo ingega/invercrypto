@@ -50,9 +50,12 @@ def scan_tangent_opportunities():
             current_price = closes[-1]
             
             if tangent_value >= threshold:
-                found_opportunities.append({"ticker": ticker, "side": "LONG", "val": tangent_value, "price": current_price})
+                found_opportunities.append({"ticker": ticker,
+                                            "side": "BUY",
+                                            "val": tangent_value,
+                                            "entry_price": current_price})
             elif tangent_value <= -threshold:
-                found_opportunities.append({"ticker": ticker, "side": "SHORT", "val": tangent_value, "price": current_price})
+                found_opportunities.append({"ticker": ticker, "side": "SELL", "val": tangent_value, "entry_price": current_price})
                 
         except Exception as e:
             print(f"❌ Error sweeping live REST data for {ticker}: {e}")
