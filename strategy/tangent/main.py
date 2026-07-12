@@ -11,7 +11,7 @@ from utils.timing import wait_for_time_trigger
 from tangent.filter import scan_tangent_opportunities
 from common_files.binance import get_actual_prices
 # logger
-from strategy.common_files.logger import get_logger
+from common_files.logger import get_logger
 
 logger = get_logger(__name__)
 
