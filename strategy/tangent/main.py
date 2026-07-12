@@ -7,9 +7,9 @@ from datetime import datetime
 from typing import Optional, List
 
 # local functions
-from strategy.utils.timing import wait_for_time_trigger
-from strategy.tangent.filter import scan_tangent_opportunities
-from strategy.common_files.binance import get_actual_prices
+from utils.timing import wait_for_time_trigger
+from tangent.filter import scan_tangent_opportunities
+from common_files.binance import get_actual_prices
 # logger
 from strategy.common_files.logger import get_logger
 
