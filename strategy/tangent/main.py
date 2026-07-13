@@ -72,7 +72,7 @@ def check_active_bets_resolution(actual_bets: Optional[list],
             with open(OPERATIONS_FILE, mode="a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    bet.get("entry_date", current_time_str),
+                    bet.get("entry_date", current_time_str), # avoid error
                     ticker,
                     side,
                     bet["entry_price"],
@@ -103,6 +103,7 @@ def build_bet_payload(item: dict) -> dict:
     ticker = item["ticker"]
     entry_price = item["entry_price"]
     side = item["side"]
+    entry_date = item["entry_date"]
 
     if side == "BUY":
         tp = entry_price * (1 + config["direct_bet_percentage"])
@@ -113,6 +114,7 @@ def build_bet_payload(item: dict) -> dict:
 
     return {
         ticker: {
+            "entry_date": entry_date,
             "entry_price": entry_price,
             "side": side,
             "tp": tp,
