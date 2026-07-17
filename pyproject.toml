@@ -11,6 +11,7 @@ pandas = "^3.0.3"
 python-binance = "^1.0.37"
 pyarrow = "^24.0.0"
 openpyxl = "^3.1.5"
+python-dotenv = "^1.2.2"
 
 [build-system]
 requires = ["poetry-core"]

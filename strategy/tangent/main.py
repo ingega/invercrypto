@@ -1,17 +1,19 @@
 # invercrypto/strategy/tangent/main.py
-import csv
 import asyncio
 from datetime import datetime
 from typing import Optional, List
 
 # local functions
-from utils.timing import wait_for_time_trigger
-from tangent.filter import scan_tangent_opportunities
 from common_files.binance import get_actual_prices
+from tangent.filter import scan_tangent_opportunities
+from utils.timing import wait_for_time_trigger
 # logger
 from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
+# database operations
+from database import save_operation_to_db
+
 
 logger = get_logger(__name__)
 
@@ -68,20 +70,17 @@ def check_active_bets_resolution(actual_bets: Optional[list],
                 exit_price = tp
             else:
                 exit_price = sl
-            # bets resolved going to csv files
-            with open(OPERATIONS_FILE, mode="a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    bet.get("entry_date", current_time_str), # avoid error
-                    ticker,
-                    side,
-                    bet["entry_price"],
-                    tp,
-                    sl,
-                    current_time_str,
-                    exit_price,
-                    outcome
-                ])
+            # add record to db
+            # strategy, entry_date, ticker, tangent, side, entry_price, tp, 
+            # sl, exit_date, exit_price, outcome
+            entry_date = bet.get("entry_date", current_time_str) # avoid error
+            entry_price = bet["entry_price"]
+            tangent = bet["val"]
+            record = (
+                "tangent", entry_date, ticker, tangent, side, entry_price, tp, sl,
+                current_time_str, exit_price, outcome  
+            )
+            save_operation_to_db(record)
             # append the ticker that need to be removed in master bet json
             resolved_tickers.append(ticker)
             logger.info(f"🚨 OPERATION RESOLVED: {ticker} hit {outcome} at {current_price}")
@@ -184,7 +183,19 @@ async def main_engine_loop():
         await asyncio.sleep(7)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main_engine_loop()) 
-    except KeyboardInterrupt:
-        logger.exception("\n🛑 Simulator runtime manually terminated safely. Standing down.")
+    entry_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ticker = "TESTCOIN"
+    tangent = 0.03
+    side = "BUY"
+    entry_price = 1.0
+    tp = 1.05
+    sl = 0.95
+    exit_date = entry_date
+    exit_price = 1.05
+    outcome = "DTP" # direct tp
+    record = (
+                "tangent", entry_date, ticker, tangent, side, entry_price, tp, sl,
+                exit_date, exit_price, outcome  
+            )
+    save_operation_to_db(record)
+    print("record added to db")
