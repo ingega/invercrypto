@@ -1,9 +1,8 @@
 # invercrypto/strategy/database.py
 # alpha listed importations
 import sqlite3
-from pathlib import Path
-from .common_files.logger import get_logger
-from .common_files.paths import DB_PATH
+from common_files.logger import get_logger
+from common_files.paths import DB_PATH
 
 logger = get_logger(__name__)
     
