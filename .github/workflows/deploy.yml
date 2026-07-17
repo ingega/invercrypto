@@ -43,7 +43,10 @@ jobs:
             fi
 
             # Environment file fallback guard
-            if [ ! -f ".env" ]; then touch .env; fi
+            if [ ! -f ".env" ]; then
+              echo "❌ ERROR: .env file not found."
+              exit 1
+            fi
 
             # =========================================================================
             # 🛡️ PERSISTENT DATA LOGS DIRECTORY GUARD

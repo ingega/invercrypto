@@ -8,7 +8,7 @@ from pathlib import Path
 This file maps all configurations and json necessary files
 """
 # load env
-PROJECT_ROOT = Path(__file__).resolve().parent.parent # get strategy
+PROJECT_ROOT = Path(__file__).resolve().parent.parent # get strategy folder
 load_dotenv(PROJECT_ROOT / ".env")
 
 # data path
