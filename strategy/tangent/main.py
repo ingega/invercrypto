@@ -183,19 +183,7 @@ async def main_engine_loop():
         await asyncio.sleep(7)
 
 if __name__ == "__main__":
-    entry_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ticker = "TESTCOIN"
-    tangent = 0.03
-    side = "BUY"
-    entry_price = 1.0
-    tp = 1.05
-    sl = 0.95
-    exit_date = entry_date
-    exit_price = 1.05
-    outcome = "DTP" # direct tp
-    record = (
-                "tangent", entry_date, ticker, tangent, side, entry_price, tp, sl,
-                exit_date, exit_price, outcome  
-            )
-    save_operation_to_db(record)
-    print("record added to db")
+    try:
+        asyncio.run(main_engine_loop()) 
+    except KeyboardInterrupt:
+        logger.exception("\n🛑 Simulator runtime manually terminated safely. Standing down.")
