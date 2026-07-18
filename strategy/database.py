@@ -15,11 +15,11 @@ def init_operations_db() -> None:
     Includes a composite index to keep historical ML feature fetches 
     lightning-fast.
     """
+    # debug
+    logger.info(f"DB_PATH = {DB_PATH}")
+    logger.info(f"Parent = {DB_PATH.parent}")
+    logger.info(f"Exists = {DB_PATH.parent.exists()}")
     with sqlite3.connect(DB_PATH) as conn:
-        # debug
-        logger.info(f"DB_PATH = {DB_PATH}")
-        logger.info(f"Parent = {DB_PATH.parent}")
-        logger.info(f"Exists = {DB_PATH.parent.exists()}")
         cursor = conn.cursor()
         # Enable Write-Ahead Logging for high-frequency concurrency updates
         cursor.execute("PRAGMA journal_mode=WAL;")
