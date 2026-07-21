@@ -22,8 +22,15 @@ def scan_tangent_opportunities():
     
     logger.info(f"🔎 [PURE SCAN] Scanning tickers: sep={separation}, threshold={threshold * 100}% "
                 f"list of tickers: {tickers}")
-    
+    # get direct bets tickers
+    direct_bets = load_json_file(BET_FILE)
+    secondary_bets = load_json_file(SECONDARY_BET_FILE)
     for ticker in tickers:
+        # avoid tickers in actual bet
+        if ticker in direct_bets:
+            continue
+        if ticker in secondary_bets:
+            continue
         try:
             # Fetch raw kline information from Binance. Returns a list of lists.
             # limit parameter requests exactly what we need + a small safety buffer

@@ -34,3 +34,6 @@ db.sqlite
 data/
 __pycache__/
 *.pyc
+
+# playground for local testing
+strategy/playground.py

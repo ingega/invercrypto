@@ -1,15 +1,8 @@
 # invercrypto/strategy/common_files/logger.py
-
 from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
-
-# Persistent data directory
-DATA_DIR = Path("/app/data")
-LOG_DIR = DATA_DIR / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-LOG_FILE = LOG_DIR / "engine.log"
+from common_files.paths import LOG_FILE
 
 
 def get_logger(name: str = "Invercrypto") -> logging.Logger:

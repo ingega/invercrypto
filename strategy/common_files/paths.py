@@ -11,8 +11,11 @@ This file maps all configurations and json necessary files
 PROJECT_ROOT = Path(__file__).resolve().parent.parent # get strategy folder
 load_dotenv(PROJECT_ROOT / ".env")
 
-# data path
-DATA_DIR = Path("/app/data")
+# project root path
+DATA_PATH = Path(os.environ["DATA_PATH"])
+
+# data dir changes if 
+DATA_DIR = DATA_PATH
 # data folders
 CONFIG_DIR = DATA_DIR / "config"
 STATE_DIR = DATA_DIR / "state"
@@ -26,10 +29,14 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 TICKERS_FILE = CONFIG_DIR / "tickers.json"
 # system address vars
 BET_FILE = STATE_DIR / "actual_bets.json"
+SECONDARY_BET_FILE = STATE_DIR / "secondary_bets.json"
 OPERATIONS_FILE = STATE_DIR / "completed_operations.csv"
+# logs
+LOG_FILE = LOG_DIR / "engine.log"
 
 # project root path
 DATA_PATH = Path(os.environ["DATA_PATH"])
+# database path
 DB_PATH = DATA_PATH / "operations.db"
 
 # I/O files functions

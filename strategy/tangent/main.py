@@ -1,9 +1,8 @@
 # invercrypto/strategy/tangent/main.py
 import asyncio
-from datetime import datetime
-from typing import Optional, List
 
 # local functions
+from common_files.bets import check_active_bets_resolution, resolve_secondary_bets
 from common_files.binance import get_actual_prices
 from tangent.filter import scan_tangent_opportunities
 from utils.timing import wait_for_time_trigger
@@ -11,89 +10,9 @@ from utils.timing import wait_for_time_trigger
 from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
-# database operations
-from database import save_operation_to_db
-
 
 logger = get_logger(__name__)
 
-# check direct bet function
-def check_active_bets_resolution(actual_bets: Optional[list], 
-                                 current_prices_dict: List[dict]):
-    """
-    Verifies open bets against current high/low/close data.
-    For demonstration, we check against the current spot/mark price.
-    In full integration, replace this with intra-hour 1m high/low data fetch.
-    A function to retrieve data from binance is required
-    :params:
-        - actual_bets (list): a list with the actual tickers in direct bet
-        - current_prices_dict: List[dict] list with current tickers prices
-    """
-    # first, verify if actual_bets contain tickers
-    if len(actual_bets) == 0:
-        logger.info(f"No bets found for {BET_FILE}")
-        return None
-    resolved_tickers = []
-    init_csv_log()
-    
-    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    for ticker, bet in list(actual_bets.items()):
-        # Pull current ticker price if available from stream/API
-        current_price = current_prices_dict.get(ticker)
-        if not current_price:
-            continue
-        # get the high and the low
-        high = current_price[ticker]["high"]
-        low = current_price[ticker]["low"]
-        side = bet["side"]
-        tp = bet["tp"]
-        sl = bet["sl"]
-        outcome = None
-        
-        # Determine tracking conditions based on position side
-        if side == "BUY":  # Long Position
-            if high >= tp:
-                outcome = "TP"
-            elif low <= sl:
-                outcome = "SL"
-        elif side == "SELL":  # Short Position
-            if low <= tp:
-                outcome = "TP"
-            elif high >= sl:
-                outcome = "SL"
-                
-        if outcome:
-            # Append to institutional CSV Log
-            # get the exit_price
-            if outcome == "TP":
-                exit_price = tp
-            else:
-                exit_price = sl
-            # add record to db
-            # strategy, entry_date, ticker, tangent, side, entry_price, tp, 
-            # sl, exit_date, exit_price, outcome
-            entry_date = bet.get("entry_date", current_time_str) # avoid error
-            entry_price = bet["entry_price"]
-            tangent = bet["val"]
-            record = (
-                "tangent", entry_date, ticker, tangent, side, entry_price, tp, sl,
-                current_time_str, exit_price, outcome  
-            )
-            save_operation_to_db(record)
-            # append the ticker that need to be removed in master bet json
-            resolved_tickers.append(ticker)
-            logger.info(f"🚨 OPERATION RESOLVED: {ticker} hit {outcome} at {current_price}")
-            
-    # Purge completed positions from the dictionary
-    actual_bet_file = load_json_file(BET_FILE)
-    for ticker in resolved_tickers:
-        # remove it from actual_bets.json file
-        del actual_bet_file[ticker]
-    # finally update json file
-    save_json_file(BET_FILE, actual_bet_file)
-    
-    return actual_bet_file
 
 # aux function to build bet payload
 def build_bet_payload(item: dict) -> dict:
@@ -103,6 +22,7 @@ def build_bet_payload(item: dict) -> dict:
     entry_price = item["entry_price"]
     side = item["side"]
     entry_date = item["entry_date"]
+    tangent = item["val"]
 
     if side == "BUY":
         tp = entry_price * (1 + config["direct_bet_percentage"])
@@ -115,6 +35,7 @@ def build_bet_payload(item: dict) -> dict:
         ticker: {
             "entry_date": entry_date,
             "entry_price": entry_price,
+            "tangent": tangent,
             "side": side,
             "tp": tp,
             "sl": sl,
@@ -135,18 +56,26 @@ async def main_engine_loop():
             target_minute=TARGET_MIN, target_second=TARGET_SEC)
         # 2. Fire the bet results, for that we need the actual prices
         actual_prices = {}
-        actual_bets = load_json_file(BET_FILE)
         for ticker in tickers:
             data = get_actual_prices(ticker=ticker, interval=config["timeframe"])
             actual_prices[ticker] = data
         logger.info("⚡ Verifying the actual bets...")
-        result = check_active_bets_resolution(actual_bets=actual_bets, 
-                                              current_prices_dict=actual_prices)
+        result = check_active_bets_resolution(current_prices_dict=actual_prices)
         # result returns the pending oppor (actual tickers with unresolved bet)
         if result:
-            logger.info(f"⚠️ [SCAN COMPLETE] - after the scanner, there's {len(result)} pendings bet")
+            direct_bets = len(result[0])
+            secondary_bets = len(result[1])
+            logger.info(f"⚠️ [SCAN COMPLETE] - after the scanner, there's " 
+                        f"{direct_bets} directs and {secondary_bets} secondary pending bets")
         else:
             logger.info(f"⚠️ [SCAN COMPLETE] - there was no bets found")
+        # next step: verify the secondary bets
+        # open secondary bet file
+        secondary_bet_file = load_json_file(SECONDARY_BET_FILE)
+        secondary_bets_result = resolve_secondary_bets(secondary_bets=secondary_bet_file,
+                                                       current_prices=actual_prices)
+        # save the new values for sec bet
+        save_json_file(SECONDARY_BET_FILE, secondary_bets_result)
         # 3. now, let's scan for new opportunities
         opportunities = scan_tangent_opportunities()
         if not opportunities:
@@ -154,12 +83,7 @@ async def main_engine_loop():
         else:
             final_compose = {}
             for opp in opportunities:
-                # we need to skip those tickers with an actual position
-                if result and opp["ticker"] in result:
-                    message = f"🖥️ [TICKER NOT AVALAIBLE] {opp['ticker']} "
-                    message += f"actually is in a bet, the position was skiped"
-                    logger.info(message)
-                    continue
+                # this tikver are already filtered
                 alert_msg = (
                     f"🚨 Opportunity alarm: Ticker={opp['ticker']} | "
                     f"Directional-Side={opp['side']} | Tangent-Value={opp['val']:.4f} | "
