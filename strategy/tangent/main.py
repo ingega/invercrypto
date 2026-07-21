@@ -46,7 +46,6 @@ async def main_engine_loop():
     logger.info("🤖 Invercrypto 2.0 Live Simulator Pipeline Initialize.")
     config = load_json_file(CONFIG_FILE)
     tickers_file = load_json_file(TICKERS_FILE)
-    print("content of the tickers file", tickers_file) 
     tickers = tickers_file["selected_tickers"]
     # Configure variables for top-of-the-hour pre-emption (e.g., 3 seconds before close)
     TARGET_MIN = config["target_minutes"]

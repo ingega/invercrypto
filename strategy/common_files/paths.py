@@ -39,7 +39,6 @@ DB_PATH = DATA_PATH / "operations.db"
 
 # I/O files functions
 def load_json_file(filepath, default_factory=dict):
-    print("file path:", filepath)
     if not os.path.exists(filepath):
         return default_factory()
     try:
