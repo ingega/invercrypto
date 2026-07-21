@@ -34,13 +34,12 @@ OPERATIONS_FILE = STATE_DIR / "completed_operations.csv"
 # logs
 LOG_FILE = LOG_DIR / "engine.log"
 
-# project root path
-DATA_PATH = Path(os.environ["DATA_PATH"])
 # database path
 DB_PATH = DATA_PATH / "operations.db"
 
 # I/O files functions
 def load_json_file(filepath, default_factory=dict):
+    print("file path:", filepath)
     if not os.path.exists(filepath):
         return default_factory()
     try:
