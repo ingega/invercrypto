@@ -34,7 +34,7 @@ def scan_tangent_opportunities():
         try:
             # Fetch raw kline information from Binance. Returns a list of lists.
             # limit parameter requests exactly what we need + a small safety buffer
-            klines = client.get_klines(symbol=ticker, 
+            klines = client.futures_klines(symbol=ticker, 
                                        interval=interval, 
                                        limit=separation)
             
