@@ -8,6 +8,8 @@ from common_files.logger import get_logger
 from common_files.paths import *
 # database operations
 from database import save_operation_to_db
+# balance operations
+from common_files.balances import update_ticker_balance, update_main_balance, calculate_net_profit
 """
 This module contains the direct and secondary bets and neccsesary function for the execution
 """
@@ -52,7 +54,8 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
         if not price_data:
             remaining_secondary[ticker] = bet
             continue
-
+        # retrieve capital
+        capital = bet["capital"]
         # 1. 24-Hour Time-Expiration (TIE) Safety Engine Check
         start_time = datetime.strptime(bet["cycle_start_time"], "%Y-%m-%d %H:%M:%S")
         # minutes provided by config
@@ -65,10 +68,12 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             leg_profit = calculate_profit(side=actual_side,
                                           entry_price=entry_price,
                                           close_price= exit_price)
-            net_profit = bet["actual_loss_percentage"] + leg_profit
+            gain = bet["actual_loss_percentage"] + leg_profit
+            # needs profit as well
+            profit = calculate_net_profit(gain=gain, capital=capital)
             record = ("tangent", bet["cycle_start_time"], ticker, bet["tangent"], 
                       actual_side, entry_price, bet["tp"], bet["sl"], 
-                      current_time_str, exit_price, "TIE", net_profit)
+                      current_time_str, exit_price, "TIE", profit, capital, gain)
             save_operation_to_db(record)
             logger.warning(f"⏱️ 24-HOUR TIE CONSTRAINT BREACHED: Liquidating cycle for {ticker}.")
             continue
@@ -85,23 +90,29 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
 
         if outcome == "TP":
             # actually is tp - commission
-            tp_profit = config["profit_percentage"] - config["commision"]
+            gain = config["profit_percentage"] - config["commision"] # gain
+            # add profit
+            profit = calculate_net_profit(gain=gain, capital=capital)
             record = ("tangent", bet["cycle_start_time"], 
                       ticker, bet["tangent"], side, bet["entry_price"], tp, sl, 
-                      current_time_str, tp, "TP", tp_profit)
+                      current_time_str, tp, "ITP", profit, capital, gain)
             save_operation_to_db(record)
+            # update balance
             logger.info(f"🏆 SECONDARY CYCLE RESOLVED (TP): {ticker} cleared debt structure.")
         elif outcome == "SL":
             # Add relative distance of this leg's failure to our global debt metric
             this_leg_loss = abs(bet["entry_price"] - sl) / bet["entry_price"]
             total_loss_pct = bet["actual_loss_percentage"] + this_leg_loss
-
             # 2. 10% Absolute Risk Circuit Breaker Check
             if total_loss_pct >= config["sl_percentage"]:
+                gain = -total_loss_pct
+                profit = calculate_net_profit(gain=gain, capital=capital)
                 record = ("tangent", bet["cycle_start_time"], ticker, bet["tangent"], 
                           side, bet["entry_price"], tp, sl, 
-                          current_time_str, sl, "SL", total_loss_pct)
+                          current_time_str, sl, "SL", total_loss_pct, capital, gain)
                 save_operation_to_db(record)
+                # finally update tickers_balances
+                update_ticker_balance(ticker=ticker, gain=gain)
                 logger.error(f"🆘 ABSOLUTE LOSS BREACHED: Killing cycle for {ticker}. Final Outcome: SL.")
                 continue
 
@@ -172,6 +183,7 @@ def check_active_bets_resolution(current_prices_dict: List[dict]):
                 outcome = "SL"
                 
         if outcome:
+            capital = bet["capital"]
             # get the exit_price
             if outcome == "TP":
                 exit_price = tp
@@ -179,14 +191,17 @@ def check_active_bets_resolution(current_prices_dict: List[dict]):
                 entry_date = bet.get("entry_date", current_time_str) # avoid error
                 entry_price = bet["entry_price"]
                 tangent = bet["tangent"]
-                profit = config["direct_bet_percentage"] - config["commission"]
+                gain = config["direct_bet_percentage"] - config["commission"]
+                profit = calculate_net_profit(gain=gain, capital=capital)
                 record = (
                 "tangent", entry_date, ticker, tangent, side, entry_price, tp, sl,
-                current_time_str, exit_price, outcome, profit  
+                current_time_str, exit_price, "DTP", profit, capital, gain  
                 )
                 save_operation_to_db(record)
                 # append the ticker that need to be removed in master bet json
                 resolved_tickers.append(ticker)
+                # update the ticker balance
+                update_ticker_balance(ticker=ticker, gain=gain)
                 logger.info(f"🍾 OPERATION RESOLVED: {ticker} hit {outcome} at {current_price}")
             else:
                 logger.info(f"📢 TICKER SL: {ticker} hit {outcome} at {current_price}")
@@ -203,6 +218,7 @@ def check_active_bets_resolution(current_prices_dict: List[dict]):
                                                  total_loss_pct=acummulated_loss)
                 record = {
                     ticker: {
+                        "capital": capital,
                         "entry_price": exit_price,
                         "tangent": 0, # this is the flag to indicate secondary bet
                         "actual_loss_percentage": acummulated_loss,
@@ -233,4 +249,4 @@ def check_active_bets_resolution(current_prices_dict: List[dict]):
             new_secondary_bet_file.update(payload)
         # final movement, save the updated bet file
         save_json_file(SECONDARY_BET_FILE, new_secondary_bet_file)
-    return actual_bet_file, new_secondary_bet_file
+    return actual_bet_file

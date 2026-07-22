@@ -31,6 +31,9 @@ TICKERS_FILE = CONFIG_DIR / "tickers.json"
 BET_FILE = STATE_DIR / "actual_bets.json"
 SECONDARY_BET_FILE = STATE_DIR / "secondary_bets.json"
 OPERATIONS_FILE = STATE_DIR / "completed_operations.csv"
+# balances
+TICKERS_BALANCES = STATE_DIR / "tickers_balances.json"
+MAIN_BALANCE = STATE_DIR / "main_balance.json"
 # logs
 LOG_FILE = LOG_DIR / "engine.log"
 

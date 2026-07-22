@@ -23,6 +23,7 @@ def build_bet_payload(item: dict) -> dict:
     side = item["side"]
     entry_date = item["entry_date"]
     tangent = item["val"]
+    capital = item["capital"]
 
     if side == "BUY":
         tp = entry_price * (1 + config["direct_bet_percentage"])
@@ -33,6 +34,7 @@ def build_bet_payload(item: dict) -> dict:
 
     return {
         ticker: {
+            "capital": capital,
             "entry_date": entry_date,
             "entry_price": entry_price,
             "tangent": tangent,
@@ -60,16 +62,18 @@ async def main_engine_loop():
         for ticker in tickers:
             data = get_actual_prices(ticker=ticker, interval=config["timeframe"])
             actual_prices[ticker] = data
-        logger.info("⚡ Verifying the actual bets...")
+        print("⚡ Verifying the actual bets...")
         result = check_active_bets_resolution(current_prices_dict=actual_prices)
         # result returns the pending oppor (actual tickers with unresolved bet)
         if result:
-            direct_bets = len(result[0])
-            secondary_bets = len(result[1])
-            logger.info(f"⚠️ [SCAN COMPLETE] - after the scanner, there's " 
+            direct_bets = len(result)
+            # secondary bet need to be loaded
+            sec_bets = load_json_file(SECONDARY_BET_FILE)
+            secondary_bets = len(sec_bets)
+            print(f"⚠️ [SCAN COMPLETE] - after the scanner, there's " 
                         f"{direct_bets} directs and {secondary_bets} secondary pending bets")
         else:
-            logger.info(f"⚠️ [SCAN COMPLETE] - there was no bets found")
+            print(f"⚠️ [SCAN COMPLETE] - there was no bets found")
         # next step: verify the secondary bets
         # open secondary bet file
         secondary_bet_file = load_json_file(SECONDARY_BET_FILE)
@@ -80,11 +84,11 @@ async def main_engine_loop():
         # 3. now, let's scan for new opportunities
         opportunities = scan_tangent_opportunities()
         if not opportunities:
-            logger.info("🤷 Sweep complete. Zero opportunities matched current boundaries.")
+            print("🤷 Sweep complete. Zero opportunities matched current boundaries.")
         else:
             final_compose = {}
             for opp in opportunities:
-                # this tikver are already filtered
+                # this ticker are already filtered
                 alert_msg = (
                     f"🚨 Opportunity alarm: Ticker={opp['ticker']} | "
                     f"Directional-Side={opp['side']} | Tangent-Value={opp['val']:.4f} | "
@@ -93,6 +97,8 @@ async def main_engine_loop():
                 logger.info(alert_msg)
                 # now let's add the ticker to json file, first we need complete data
                 final_compose.update(build_bet_payload(opp))
+                # once updated the list, we need to reduce the maximum loss size in the avalaible
+                # balance  (PENDING)
             # 4. in this point we have the correct information in final compose to add at json file 
             new_bet_file = load_json_file(BET_FILE)
             for bet in final_compose.items():
@@ -101,9 +107,7 @@ async def main_engine_loop():
             # 5. final movement, save the updated bet file
             save_json_file(BET_FILE, new_bet_file)
         # inform
-        logger.info(f"✅[OPERATION COMPLETE] The revision and scaner oppor was completed")
-                
-                
+        print(f"✅[OPERATION COMPLETE] The revision and scaner oppor was completed")
         # Give a small buffer pause to prevent hitting the same execution second twice
         await asyncio.sleep(7)
 

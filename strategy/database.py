@@ -38,7 +38,9 @@ def init_operations_db() -> None:
                 exit_date TEXT NOT NULL,
                 exit_price REAL NOT NULL,
                 outcome TEXT NOT NULL,
-                profit REAL NOT NULL
+                profit REAL NOT NULL,
+                capital REAL NOT NULL,
+                gain REAL NOT NULL
             );
         """)
         # Composite Index to radically accelerate future Machine Learning data fetching
@@ -55,8 +57,8 @@ def save_operation_to_db(data: tuple) -> None:
     query = """
         INSERT INTO tangent_completed_operations (
             strategy, entry_date, ticker, tangent, side, entry_price, tp, sl, exit_date, 
-            exit_price, outcome, profit
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            exit_price, outcome, profit, capital, gain
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """ 
     try:
         with sqlite3.connect(DB_PATH) as conn:

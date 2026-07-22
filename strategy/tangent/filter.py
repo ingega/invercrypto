@@ -6,6 +6,8 @@ from datetime import UTC
 # I/O files functions
 from common_files.paths import *
 from common_files.logger import get_logger
+# notional size and balance functions
+from common_files.balances import calculate_notional_size
 
 logger = get_logger(__name__)
 
@@ -20,8 +22,7 @@ def scan_tangent_opportunities():
     client = Client()
     found_opportunities = []
     
-    logger.info(f"🔎 [PURE SCAN] Scanning tickers: sep={separation}, threshold={threshold * 100}% "
-                f"list of tickers: {tickers}")
+    print(f"🔎 [PURE SCAN] Scanning tickers: {tickers}")
     # get direct bets tickers
     direct_bets = load_json_file(BET_FILE)
     secondary_bets = load_json_file(SECONDARY_BET_FILE)
@@ -47,14 +48,20 @@ def scan_tangent_opportunities():
             # tangent is: last close - first close / first close
             tangent_value = (last_close - first_close) / first_close
             # necessary data: entry_date, side, val, and entry_price
+            print(f"tangent value for {ticker}: {tangent_value: .4f} and the threshold is {threshold}")
+            print("is tangent <= -threshold?: ", tangent_value<=-threshold)
+            # prepare notional size
+            capital = calculate_notional_size(ticker=ticker)
             if tangent_value >= threshold:
                 found_opportunities.append({"ticker": ticker,
+                                            "capital": capital,
                                             "entry_date": entry_date,
                                             "side": "BUY",
                                             "val": tangent_value,
                                             "entry_price": last_close})
             elif tangent_value <= -threshold:
                 found_opportunities.append({"ticker": ticker,
+                                            "capital": capital,
                                             "entry_date": entry_date,
                                             "side": "SELL",
                                             "val": tangent_value,
