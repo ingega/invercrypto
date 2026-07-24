@@ -7,9 +7,10 @@ from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
 # database operations
-from database import save_operation_to_db
+from database import save_operation_to_db, save_partial_operation_to_db
 # balance operations
-from common_files.balances import update_ticker_balance, update_main_balance, calculate_net_profit
+from common_files.balances import calculate_net_profit, update_available_balance 
+from common_files.balances import update_main_balance, update_ticker_balance
 """
 This module contains the direct and secondary bets and neccsesary function for the execution
 """
@@ -54,7 +55,15 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
         if not price_data:
             remaining_secondary[ticker] = bet
             continue
-        # retrieve capital
+        # retrieve data
+        entry_date = bet["entry_date"]
+        exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        actual_side = bet["actual_side"]
+        entry_price = bet["entry_price"]
+        exit_price = price_data[ticker]["close"]
+        tp = bet["tp"]
+        sl = bet["sl"]
+        operation_id = bet["operation_id"]
         capital = bet["capital"]
         # 1. 24-Hour Time-Expiration (TIE) Safety Engine Check
         start_time = datetime.strptime(bet["cycle_start_time"], "%Y-%m-%d %H:%M:%S")
@@ -62,19 +71,27 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
         minutes = config["stop_bet_minutes"]
         if current_time - start_time >= timedelta(minutes=minutes):
             # calculate this leg profit
-            actual_side = bet["actual_side"]
-            entry_price = bet["entry_price"]
-            exit_price = price_data[ticker]["close"]
             leg_profit = calculate_profit(side=actual_side,
                                           entry_price=entry_price,
                                           close_price= exit_price)
             gain = bet["actual_loss_percentage"] + leg_profit
             # needs profit as well
             profit = calculate_net_profit(gain=gain, capital=capital)
-            record = ("tangent", bet["cycle_start_time"], ticker, bet["tangent"], 
-                      actual_side, entry_price, bet["tp"], bet["sl"], 
-                      current_time_str, exit_price, "TIE", profit, capital, gain)
-            save_operation_to_db(record)
+            # save record to partial operations as well
+            # columns: 
+            # operation_id, entry_date, side, entry_price, tp, sl, 
+            # exit_date, exit_price, outcome, gain, bet ((D)irect or (I)ndirect)
+            record = (
+                operation_id, entry_date, actual_side, entry_price, tp, sl, 
+                exit_date, exit_price, "TIE", gain, "I"
+                            )
+            save_partial_operation_to_db(record)
+            # update ticker balance
+            update_ticker_balance(ticker=ticker, gain=gain)
+            # update main and available balances
+            update_main_balance(gain=gain, capital=capital)
+            colateral_returned = bet["colateral"] + profit
+            update_available_balance(capital=colateral_returned)
             logger.warning(f"⏱️ 24-HOUR TIE CONSTRAINT BREACHED: Liquidating cycle for {ticker}.")
             continue
         high, low = price_data[ticker]["close"], price_data[ticker]["close"]
@@ -93,11 +110,22 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             gain = config["profit_percentage"] - config["commision"] # gain
             # add profit
             profit = calculate_net_profit(gain=gain, capital=capital)
-            record = ("tangent", bet["cycle_start_time"], 
-                      ticker, bet["tangent"], side, bet["entry_price"], tp, sl, 
-                      current_time_str, tp, "ITP", profit, capital, gain)
-            save_operation_to_db(record)
-            # update balance
+            # columns: 
+            # operation_id, entry_date, side, entry_price, tp, sl, 
+            # exit_date, exit_price, outcome, gain, bet ((D)irect or (I)ndirect)
+            record = (
+                operation_id, entry_date, actual_side, entry_price, tp, sl, 
+                exit_date, exit_price, "TP", gain, "I"
+                            )
+            save_partial_operation_to_db(record)
+            # also we need to update the profit, outcome and gain for the operation_id
+            # (PENDING)
+            # update ticker balance
+            update_ticker_balance(ticker=ticker, gain=gain)
+            # update main balance and available balance
+            update_main_balance(gain=gain, capital=capital)
+            colateral_returned = bet["colateral"] + profit
+            update_available_balance(capital=colateral_returned)
             logger.info(f"🏆 SECONDARY CYCLE RESOLVED (TP): {ticker} cleared debt structure.")
         elif outcome == "SL":
             # Add relative distance of this leg's failure to our global debt metric
@@ -113,6 +141,11 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 save_operation_to_db(record)
                 # finally update tickers_balances
                 update_ticker_balance(ticker=ticker, gain=gain)
+                # update main and available balance
+                update_main_balance(gain=gain, capital=capital)
+                # returned balance is colateral + profit
+                colateral_returned = bet["colateral"] + profit
+                update_available_balance(capital=colateral_returned)
                 logger.error(f"🆘 ABSOLUTE LOSS BREACHED: Killing cycle for {ticker}. Final Outcome: SL.")
                 continue
 
@@ -121,6 +154,8 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             new_tp, new_sl = calculate_flip_brackets(flipped_side, sl, total_loss_pct)
 
             remaining_secondary[ticker] = {
+                "capital": bet["capital"],
+                "colateral": bet["colateral"],
                 "entry_price": sl,
                 "tangent": bet["tangent"],
                 "actual_loss_percentage": total_loss_pct,
@@ -180,28 +215,43 @@ def check_active_bets_resolution(current_prices_dict: List[dict]):
             if low <= tp:
                 outcome = "TP"
             elif high >= sl:
-                outcome = "SL"
-                
+                outcome = "SL"        
         if outcome:
             capital = bet["capital"]
+            colateral = bet["colateral"]
+            operation_id = bet["operation_id"]
+            exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            entry_date = bet.get("entry_date", current_time_str) # avoid error
+            entry_price = bet["entry_price"]
             # get the exit_price
             if outcome == "TP":
                 exit_price = tp
                 # add to the database, is resolved now
-                entry_date = bet.get("entry_date", current_time_str) # avoid error
-                entry_price = bet["entry_price"]
-                tangent = bet["tangent"]
                 gain = config["direct_bet_percentage"] - config["commission"]
                 profit = calculate_net_profit(gain=gain, capital=capital)
+                # columns: operation_id, strategy, ticker, outcome, gain, capital, profit 
                 record = (
-                "tangent", entry_date, ticker, tangent, side, entry_price, tp, sl,
-                current_time_str, exit_price, "DTP", profit, capital, gain  
+                operation_id, "tangent", ticker, "DTP", gain, capital, profit
                 )
                 save_operation_to_db(record)
+                # save record to partial operations as well
+                # columns: 
+                # operation_id, entry_date, side, entry_price, tp, sl, 
+                # exit_date, exit_price, outcome, gain, bet ((D)irect or (I)ndirect)
+                record_partial = (
+                    operation_id, entry_date, side, entry_price, tp, sl, 
+                    exit_date, exit_price, "DTP", gain, "D"
+                                )
+                save_partial_operation_to_db(record_partial)
                 # append the ticker that need to be removed in master bet json
                 resolved_tickers.append(ticker)
                 # update the ticker balance
                 update_ticker_balance(ticker=ticker, gain=gain)
+                # also update the main and available balance
+                update_main_balance(gain=gain, capital=capital)
+                # the net balance for available_balance is the colateral + profit
+                colateral_returned = bet["colateral"] + profit
+                update_available_balance(capital=colateral_returned)
                 logger.info(f"🍾 OPERATION RESOLVED: {ticker} hit {outcome} at {current_price}")
             else:
                 logger.info(f"📢 TICKER SL: {ticker} hit {outcome} at {current_price}")
@@ -216,9 +266,19 @@ def check_active_bets_resolution(current_prices_dict: List[dict]):
                 tp, sl = calculate_flip_brackets(side=new_side,
                                                  entry_price=exit_price,
                                                  total_loss_pct=acummulated_loss)
+                # add sl record to partial operations
+                # columns: 
+                # operation_id, entry_date, side, entry_price, tp, sl, 
+                # exit_date, exit_price, outcome, gain, bet ((D)irect or (I)ndirect)
+                record_partial = (
+                    operation_id, entry_date, side, entry_price, tp, sl, 
+                    exit_date, exit_price, "SL", acummulated_loss, "D"
+                                )
                 record = {
                     ticker: {
+                        "operation_id": operation_id,
                         "capital": capital,
+                        "colateral": colateral,
                         "entry_price": exit_price,
                         "tangent": 0, # this is the flag to indicate secondary bet
                         "actual_loss_percentage": acummulated_loss,

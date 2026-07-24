@@ -34,6 +34,7 @@ OPERATIONS_FILE = STATE_DIR / "completed_operations.csv"
 # balances
 TICKERS_BALANCES = STATE_DIR / "tickers_balances.json"
 MAIN_BALANCE = STATE_DIR / "main_balance.json"
+AVAILABLE_BALANCE = STATE_DIR / "available_balance.json"
 # logs
 LOG_FILE = LOG_DIR / "engine.log"
 

@@ -1,5 +1,4 @@
-import os
-import json
+import time
 from binance.client import Client
 from datetime import datetime as dt
 from datetime import UTC
@@ -7,7 +6,7 @@ from datetime import UTC
 from common_files.paths import *
 from common_files.logger import get_logger
 # notional size and balance functions
-from common_files.balances import calculate_notional_size
+from common_files.balances import calculate_notional_size, calculate_colateral
 
 logger = get_logger(__name__)
 
@@ -48,20 +47,22 @@ def scan_tangent_opportunities():
             # tangent is: last close - first close / first close
             tangent_value = (last_close - first_close) / first_close
             # necessary data: entry_date, side, val, and entry_price
-            print(f"tangent value for {ticker}: {tangent_value: .4f} and the threshold is {threshold}")
-            print("is tangent <= -threshold?: ", tangent_value<=-threshold)
-            # prepare notional size
-            capital = calculate_notional_size(ticker=ticker)
+            # prepare notional size, colateral and operation_id (actual timestamp in ms)
+            operation_id = time.time_ns()
             if tangent_value >= threshold:
-                found_opportunities.append({"ticker": ticker,
-                                            "capital": capital,
+                found_opportunities.append({"operation_id": operation_id,
+                                            "ticker": ticker,
+                                            "capital": 0,
+                                            "colateral": 0,
                                             "entry_date": entry_date,
                                             "side": "BUY",
                                             "val": tangent_value,
                                             "entry_price": last_close})
             elif tangent_value <= -threshold:
-                found_opportunities.append({"ticker": ticker,
-                                            "capital": capital,
+                found_opportunities.append({"operation_id": operation_id,
+                                            "ticker": ticker,
+                                            "capital": 0,
+                                            "colateral": 0,
                                             "entry_date": entry_date,
                                             "side": "SELL",
                                             "val": tangent_value,

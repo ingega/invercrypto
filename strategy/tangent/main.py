@@ -10,6 +10,9 @@ from utils.timing import wait_for_time_trigger
 from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
+# balances
+from common_files.balances import reduce_available_balance, update_available_balance
+from common_files.balances import calculate_colateral, calculate_notional_size
 
 logger = get_logger(__name__)
 
@@ -17,13 +20,14 @@ logger = get_logger(__name__)
 # aux function to build bet payload
 def build_bet_payload(item: dict) -> dict:
     config = load_json_file(CONFIG_FILE)
-
+    operation_id = item["operation_id"]
     ticker = item["ticker"]
     entry_price = item["entry_price"]
     side = item["side"]
     entry_date = item["entry_date"]
     tangent = item["val"]
     capital = item["capital"]
+    colateral = item["colateral"]
 
     if side == "BUY":
         tp = entry_price * (1 + config["direct_bet_percentage"])
@@ -34,7 +38,9 @@ def build_bet_payload(item: dict) -> dict:
 
     return {
         ticker: {
+            "operation_id": operation_id,
             "capital": capital,
+            "colateral": colateral,
             "entry_date": entry_date,
             "entry_price": entry_price,
             "tangent": tangent,
@@ -89,16 +95,24 @@ async def main_engine_loop():
             final_compose = {}
             for opp in opportunities:
                 # this ticker are already filtered
+                tkr = opp["ticker"]
                 alert_msg = (
-                    f"🚨 Opportunity alarm: Ticker={opp['ticker']} | "
+                    f"🚨 Opportunity alarm: Ticker={tkr} | "
                     f"Directional-Side={opp['side']} | Tangent-Value={opp['val']:.4f} | "
                     f"Trigger-Price={opp['entry_price']}"
                 )
                 logger.info(alert_msg)
+                # we need calculate the capital and colateral
+                capital = calculate_notional_size(tkr)
+                colateral = calculate_colateral(capital=capital) 
                 # now let's add the ticker to json file, first we need complete data
-                final_compose.update(build_bet_payload(opp))
-                # once updated the list, we need to reduce the maximum loss size in the avalaible
-                # balance  (PENDING)
+                record = build_bet_payload(opp)
+                record[tkr]["capital"] = capital
+                record[tkr]["colateral"] = colateral
+                final_compose.update(record)
+                # once updated the list, we need to reduce the maximum loss size in 
+                # the avalaible balance
+                reduce_available_balance(colateral=colateral)
             # 4. in this point we have the correct information in final compose to add at json file 
             new_bet_file = load_json_file(BET_FILE)
             for bet in final_compose.items():

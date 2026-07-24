@@ -52,7 +52,7 @@ def update_main_balance(gain:float, capital:float) -> float:
     # get balance
     main_balance = load_json_file(MAIN_BALANCE)["main_balance"]
     # get profit
-    net_profit = calculate_profit(gain=gain, capital=capital)
+    net_profit = calculate_net_profit(gain=gain, capital=capital)
     new_balance = main_balance + net_profit
     if new_balance <= 0:
         logger.info(f"🆘 [BALANCE TERMINATED] - The current balance is completed loss")
@@ -62,9 +62,70 @@ def update_main_balance(gain:float, capital:float) -> float:
     save_json_file(MAIN_BALANCE, record)
     return new_balance
 
+# available balance
+def reduce_available_balance(colateral: float) -> float:
+    """
+    This function update the available balance by reducing
+    the available balance for next position
+    =====================================
+    parameters:
+    -------------------------------------
+    colateral(float): max amount of loss on a position
+    -------------------------------------
+    returns:
+    remain_balance(float): available capital for next operation
+    Example:
+        If the available_balance is 1500 and the colateral ammount for actual
+        postion is 50, then, the available_balance for next position is 1450
+    =======================================
+    """
+    # get the actual available balalce
+    available_balance = load_json_file(AVAILABLE_BALANCE)
+    actual_available_balance = available_balance["available_balance"]
+    remain_balance = actual_available_balance - colateral
+    available_balance["available_balance"] = remain_balance
+    save_json_file(AVAILABLE_BALANCE, available_balance)
+    logger.info(f"🏛️  [AVAILABLE BALANCE] The available balance remains in {remain_balance: .2f}")
+    return remain_balance
+
+def update_available_balance(capital: float) -> float:
+    """
+    This function add the capital (positive or negative) to the
+    available balance
+    ========================================
+    parameters:
+        capital(float): ammount added (or substracted) to the available_balance
+    -----------------------------------------
+    returns:
+        final_balance(float): final available_balance for next position
+    Example:
+        - If the actual available balance is 1000, and capital is 200, the available_balance is
+        updated to 1200, function returns 1200
+        - If the actual available balance is 1000, and capital is -200, the available_balance
+        is updated to 800, function returns 800
+    """
+    available_balance = load_json_file(AVAILABLE_BALANCE)
+    actual_balance = available_balance["available_balance"]
+    updated_balance = actual_balance + capital
+    available_balance["available_balance"] = updated_balance
+    save_json_file(AVAILABLE_BALANCE, available_balance)
+    logger.info(f"🏛️  [AVAILABLE BALANCE] The updated available balance is {updated_balance: .2f}")
+    return updated_balance
+
 def calculate_notional_size(ticker:str):
-    balance = load_json_file(MAIN_BALANCE)["main_balance"]
-    size = load_json_file(CONFIG_FILE)["size_percentage"] # percentage of main capital
+    """
+    This function calculates the money for a position (notional size)
+    parameters:
+    ------------------------
+    ticker(str): name of ticker
+    -------------------------
+    returns:
+    net_capital(float): net capital for the next position
+    -------------------------
+    """
+    balance = load_json_file(AVAILABLE_BALANCE)["available_balance"]
+    config = load_json_file(CONFIG_FILE)
+    size = config["size_percentage"] # percentage of main capital
     # tickers in direct bet are necessary for evaluation
     direct_positions = load_json_file(BET_FILE)
     secondary_positions = load_json_file(SECONDARY_BET_FILE)
@@ -73,8 +134,32 @@ def calculate_notional_size(ticker:str):
         size /= 2
     # finally the balance of ticker
     ticker_balance = load_json_file(TICKERS_BALANCES)[ticker]["actual_balance"]
-    return balance * size * ticker_balance
+    net_capital = balance * size * ticker_balance
+    return net_capital
 
+# colateral func
+def calculate_colateral(capital: float) -> float:
+    """
+    This method calculates the colateral position for reduction
+    of available balance
+    =======================
+    parameters:
+        capital(float): capital used in a position
+    -----------------------
+    return:
+        colateral(float): colateral capital that reduces the
+        available balance for next position
+    Examples:
+    With a 10% sl_percentage configurated and 20x levarage
+    a capital of 20 gets a colateral of
+    20*0.1*20 = 40 -> colateral returned
+    ========================
+    """
+    config = load_json_file(CONFIG_FILE)
+    leverage = config["leverage"]
+    max_sl = config["sl_percentage"] # maximum percentage of loss in a position
+    colateral = capital * max_sl * leverage
+    return colateral
 
 def main():
     # get the capital for BTC first
