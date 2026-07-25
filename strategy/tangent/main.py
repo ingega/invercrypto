@@ -129,4 +129,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_engine_loop()) 
     except KeyboardInterrupt:
-        logger.exception("\n🛑 Simulator runtime manually terminated safely. Standing down.")
+        logger.exception("\n🛑 Simulator runtime manually terminated safely (user key press). Standing down.")
