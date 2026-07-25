@@ -1,7 +1,8 @@
 # invercrypto/strategy/database.py
 # alpha listed importations
 import sqlite3
-from .dataclasses import CompletedOperation, PartialOperation, UpdateOperation 
+import traceback
+from data_classes import CompletedOperation, PartialOperation, UpdateOperation 
 from common_files.logger import get_logger
 from common_files.paths import DB_PATH
 
@@ -84,8 +85,9 @@ def save_operation_to_db(operation: CompletedOperation) -> bool:
             conn.commit()
             logger.info("🟢 [DB] record added to completed_operations table")
     except sqlite3.Error as e:
-        logger.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
-        return False
+       logger.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
+       traceback.print_exc()
+       return False
     return True
 
 def save_partial_operation_to_db(partial_operation: PartialOperation) -> bool:
@@ -115,12 +117,13 @@ def update_operations(update_operation: UpdateOperation) -> bool:
     ------------------------------------
     params:
         Tuple[update_operation(UpdateOperation)]: 
-            gain(float), profit(float), operation_id(int)
+           0outocome(str), gain(float), profit(float), operation_id(int)
     ------------------------------------
     Example:
-        update_operations(0.02, 50, 1784889912000)
+        update_operations("ITP", 0.02, 50, 1784889912000)
     Using dataclass:
         op = UpdateOperation(
+        outcome = "ITP",
         gain = 0.02,
         profit = 50,
         operation_id = 1784889912000
@@ -129,9 +132,9 @@ def update_operations(update_operation: UpdateOperation) -> bool:
     """
     query = """
             UPDATE completed_operations (
-                gain, profit  
+                outcome, gain, profit  
             ) 
-            SET VALUES (?, ?)
+            SET VALUES (?, ?, ?)
             WHERE operation_id = ?;
         """ 
     try:

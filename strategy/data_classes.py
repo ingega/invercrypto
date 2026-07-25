@@ -16,7 +16,6 @@ class CompletedOperation:
 
     def as_tuple(self) -> Tuple:
         return (
-            self.strategy,
             self.operation_id,
             self.strategy,
             self.ticker,
@@ -57,12 +56,14 @@ class PartialOperation:
 
 @dataclass
 class UpdateOperation:
+    outcome: str
     gain: float
     profit: float
     operation_id: int
 
     def as_tuple(self) -> Tuple:
         return(
+            self.outcome,
             self.gain,
             self.profit,
             self.operation_id

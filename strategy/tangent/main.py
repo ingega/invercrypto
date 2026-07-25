@@ -11,7 +11,7 @@ from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
 # balances
-from common_files.balances import reduce_available_balance, update_available_balance
+from common_files.balances import reduce_available_balance
 from common_files.balances import calculate_colateral, calculate_notional_size
 
 logger = get_logger(__name__)
@@ -123,7 +123,7 @@ async def main_engine_loop():
         # inform
         print(f"✅[OPERATION COMPLETE] The revision and scaner oppor was completed")
         # Give a small buffer pause to prevent hitting the same execution second twice
-        await asyncio.sleep(7)
+        await asyncio.sleep(3)
 
 if __name__ == "__main__":
     try:

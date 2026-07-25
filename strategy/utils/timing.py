@@ -30,8 +30,13 @@ async def wait_for_time_trigger(target_hour: int, target_minute: int = 59, targe
         left_minutes = target_minute - (actual_minute % (target_minute + 1))
         
         # Calculate seconds and precise microsecond alignment
-        left_seconds = target_second - actual_second
-        
+        # if seconds is above 30, then calculates for entire minute
+        if target_second > 29:
+            left_seconds = target_second - actual_second
+        else:
+            left_seconds = target_second - (actual_second % target_second)
+        # example: actual second: 35, target_second: 10 = 10 - (35 % 10)
+        # equals to 10 - 5 = 5
         # Handle edge case where we are inside the target buffer minute but past the target second
         if left_minutes == 0 and left_seconds < 0:
             # Shift window forward by one full step block
@@ -54,4 +59,24 @@ async def wait_for_time_trigger(target_hour: int, target_minute: int = 59, targe
 
         print(f"⚡ [CLOCK] Pre-emptive execution window hit at {datetime.now().strftime('%H:%M:%S.%f')[:-3]}! Triggering scan...")
         break
+
+def main():
+    TARGET_HOUR = 0
+    TARGET_MINUTE = 0
+    TARGET_SECOND = 40
+    print("Timer function init")
+    while True:
+        try:
+            asyncio.run(wait_for_time_trigger(target_hour=TARGET_HOUR,
+                                            target_minute=TARGET_MINUTE,
+                                            target_second=TARGET_SECOND)
+                                            )
+            print(f"actual time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}")
+        except Exception as e:
+            print(f"Timer fuction fails: {e} ")
+
+if __name__ == '__main__':
+    main()
+
+
         
