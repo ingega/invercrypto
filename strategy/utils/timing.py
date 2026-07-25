@@ -71,7 +71,7 @@ def main():
                                             target_minute=TARGET_MINUTE,
                                             target_second=TARGET_SECOND)
                                             )
-            print(f"actual time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}")
+            print(f"actual time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         except Exception as e:
             print(f"Timer fuction fails: {e} ")
 
