@@ -161,6 +161,28 @@ def calculate_colateral(capital: float) -> float:
     colateral = capital * max_sl * leverage
     return colateral
 
+def reset_balances():
+    config = load_json_file(CONFIG_FILE)
+    initial_balance = config.get("initial_balance", 1500)
+    # main
+    main_balance = load_json_file(MAIN_BALANCE)
+    main_balance["main_balance"] = initial_balance
+    save_json_file(MAIN_BALANCE, main_balance)
+    logger.info(f"🏛️ [BALANCES] main_balance was reseted to {initial_balance}")
+    # available
+    available_balance = load_json_file(AVAILABLE_BALANCE)
+    available_balance["available_balance"] = initial_balance
+    save_json_file(AVAILABLE_BALANCE, available_balance)
+    logger.info(f"🏛️ [BALANCES] available_balance was reseted to {initial_balance}")
+    # tickers
+    tickers_balances = load_json_file(TICKERS_BALANCES)
+    for ticker in tickers_balances:
+        tickers_balances[ticker]["actual_balance"] = 1.0
+    save_json_file(TICKERS_BALANCES, tickers_balances)
+    logger.info(f"🏛️ [BALANCES] ticker balances was reseted to 1.0")
+    
+
+
 def main():
     # get the capital for BTC first
     ticker = "BTCUSDT"

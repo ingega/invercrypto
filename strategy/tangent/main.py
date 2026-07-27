@@ -2,7 +2,7 @@
 import asyncio
 
 # local functions
-from common_files.bets import check_active_bets_resolution, resolve_secondary_bets
+from common_files.bets import check_active_bets_resolution, resolve_secondary_bets, reset_bets
 from common_files.binance import get_actual_prices
 from tangent.filter import scan_tangent_opportunities
 from utils.timing import wait_for_time_trigger
@@ -11,50 +11,55 @@ from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
 # balances
-from common_files.balances import reduce_available_balance
-from common_files.balances import calculate_colateral, calculate_notional_size
+from common_files.balances import reset_balances
+# database
+from database import reset_completed_operations, reset_partial_operations
 
 logger = get_logger(__name__)
 
-
-# aux function to build bet payload
-def build_bet_payload(item: dict) -> dict:
-    config = load_json_file(CONFIG_FILE)
-    operation_id = item["operation_id"]
-    ticker = item["ticker"]
-    entry_price = item["entry_price"]
-    side = item["side"]
-    entry_date = item["entry_date"]
-    tangent = item["val"]
-    capital = item["capital"]
-    colateral = item["colateral"]
-
-    if side == "BUY":
-        tp = entry_price * (1 + config["direct_bet_percentage"])
-        sl = entry_price * (1 - config["direct_bet_percentage"])
-    else:
-        tp = entry_price * (1 - config["direct_bet_percentage"])
-        sl = entry_price * (1 + config["direct_bet_percentage"])
-
-    return {
-        ticker: {
-            "operation_id": operation_id,
-            "capital": capital,
-            "colateral": colateral,
-            "entry_date": entry_date,
-            "entry_price": entry_price,
-            "tangent": tangent,
-            "side": side,
-            "tp": tp,
-            "sl": sl,
-        }
-    }
-
 async def main_engine_loop():
+    """
+    workflow:
+    while True:
+        1. Trigger time control
+        2. Review direct bet result
+        3. Review secondary_bet result
+        4. call scanner opportunities
+    """
     logger.info("🤖 Invercrypto 2.0 Live Simulator Pipeline Initialize.")
     config = load_json_file(CONFIG_FILE)
     tickers_file = load_json_file(TICKERS_FILE)
     tickers = tickers_file["selected_tickers"]
+    ##### pipeline for strategy reset #####################
+    # 1. remove all logs
+    # 2. Call reset_completed_operations
+    # 3. Call reset_partial_operations
+    # 4. Call reset_balances
+    # 5. remove bets and partial bets
+    #########################################################
+    reset_strategy = config.get("reset_strategy", False)
+    if reset_strategy:
+        # 1. reset log file
+        try:
+            with open(LOG_FILE, "r+") as file:
+                file.truncate(0)
+                file.close()
+        except:
+            logger.warning(f"⚠️ [LOG] The logger file could not have been reset.")
+        # 2. reset completed operations
+        reset_completed_operations()
+        # 3. reset partial operations
+        reset_partial_operations()
+        # 4. reset balances
+        reset_balances()
+        # 5. remove bets and partial bets
+        reset_bets()
+        # avoid loop or accidents
+        config["reset_strategy"] = False
+        save_json_file(CONFIG_FILE, config)
+    elif reset_strategy is None:
+        logger.info(f"⚠️ [CONFIG] Variable 'reset_strategy' is not present in config file")
+
     # Configure variables for top-of-the-hour pre-emption (e.g., 3 seconds before close)
     TARGET_MIN = config["target_minutes"]
     TARGET_SEC = config["target_seconds"]
@@ -66,60 +71,22 @@ async def main_engine_loop():
         # 2. Fire the bet results, for that we need the actual prices
         actual_prices = {}
         for ticker in tickers:
-            data = get_actual_prices(ticker=ticker, interval=config["timeframe"])
+            data = get_actual_prices(ticker=ticker, interval="1m")
             actual_prices[ticker] = data
         print("⚡ Verifying the actual bets...")
-        result = check_active_bets_resolution(current_prices_dict=actual_prices)
-        # result returns the pending oppor (actual tickers with unresolved bet)
-        if result:
-            direct_bets = len(result)
-            # secondary bet need to be loaded
-            sec_bets = load_json_file(SECONDARY_BET_FILE)
-            secondary_bets = len(sec_bets)
-            print(f"⚠️ [SCAN COMPLETE] - after the scanner, there's " 
-                        f"{direct_bets} directs and {secondary_bets} secondary pending bets")
-        else:
-            print(f"⚠️ [SCAN COMPLETE] - there was no bets found")
-        # next step: verify the secondary bets
-        # open secondary bet file
-        secondary_bet_file = load_json_file(SECONDARY_BET_FILE)
-        secondary_bets_result = resolve_secondary_bets(secondary_bets=secondary_bet_file,
-                                                       current_prices=actual_prices)
-        # save the new values for sec bet
-        save_json_file(SECONDARY_BET_FILE, secondary_bets_result)
-        # 3. now, let's scan for new opportunities
-        opportunities = scan_tangent_opportunities()
-        if not opportunities:
-            print("🤷 Sweep complete. Zero opportunities matched current boundaries.")
-        else:
-            final_compose = {}
-            for opp in opportunities:
-                # this ticker are already filtered
-                tkr = opp["ticker"]
-                alert_msg = (
-                    f"🚨 Opportunity alarm: Ticker={tkr} | "
-                    f"Directional-Side={opp['side']} | Tangent-Value={opp['val']:.4f} | "
-                    f"Trigger-Price={opp['entry_price']}"
-                )
-                logger.info(alert_msg)
-                # we need calculate the capital and colateral
-                capital = calculate_notional_size(tkr)
-                colateral = calculate_colateral(capital=capital) 
-                # now let's add the ticker to json file, first we need complete data
-                record = build_bet_payload(opp)
-                record[tkr]["capital"] = capital
-                record[tkr]["colateral"] = colateral
-                final_compose.update(record)
-                # once updated the list, we need to reduce the maximum loss size in 
-                # the avalaible balance
-                reduce_available_balance(colateral=colateral)
-            # 4. in this point we have the correct information in final compose to add at json file 
-            new_bet_file = load_json_file(BET_FILE)
-            for bet in final_compose.items():
-                payload = {bet[0]: bet[1]}
-                new_bet_file.update(payload)
-            # 5. final movement, save the updated bet file
-            save_json_file(BET_FILE, new_bet_file)
+        check_active_bets_resolution(current_prices_dict=actual_prices)
+        # inform how many bets are active
+        dir_bets = load_json_file(BET_FILE)
+        sec_bets = load_json_file(SECONDARY_BET_FILE)
+        direct_bets = len(dir_bets)
+        secondary_bets = len(sec_bets)
+        # secondary bet need to be loaded
+        print(f"🔵 [SCAN COMPLETE] - after the scanner, there's " 
+                    f"{direct_bets} directs and {secondary_bets} secondary pending bets")
+        # III: verify the secondary bets
+        resolve_secondary_bets(secondary_bets=sec_bets, current_prices=actual_prices)
+        # 4. scan for new opportunities
+        scan_tangent_opportunities()
         # inform
         print(f"✅[OPERATION COMPLETE] The revision and scaner oppor was completed")
         # Give a small buffer pause to prevent hitting the same execution second twice

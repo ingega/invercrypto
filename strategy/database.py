@@ -2,7 +2,7 @@
 # alpha listed importations
 import sqlite3
 import traceback
-from data_classes import CompletedOperation, PartialOperation, UpdateOperation 
+from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation, UpdatePartialOperation
 from common_files.logger import get_logger
 from common_files.paths import DB_PATH
 
@@ -83,7 +83,8 @@ def save_operation_to_db(operation: CompletedOperation) -> bool:
             cursor = conn.cursor()
             cursor.execute(query, operation.as_tuple())
             conn.commit()
-            logger.info("🟢 [DB] record added to completed_operations table")
+            logger.info(f"🟢 [DB] record for {operation.ticker} added to completed_operations" 
+                        f" table with operation_id {operation.operation_id}")
     except sqlite3.Error as e:
        logger.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
        traceback.print_exc()
@@ -105,50 +106,126 @@ def save_partial_operation_to_db(partial_operation: PartialOperation) -> bool:
             cursor = conn.cursor()
             cursor.execute(query, partial_operation.as_tuple())
             conn.commit()
-            logger.info("🟢 [DB] record added to partial_operations table")
+            logger.info("🟢 [DB] record added to partial_operations table with"
+                        f" operation id: {partial_operation.operation_id}")
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE PARTIAL OP INSERTION FAILURE: {str(e)}")
         return False
     return True
 
-def update_operations(update_operation: UpdateOperation) -> bool:
+def update_completed_operations(update_completed_operation: UpdateCompletedOperation) -> bool:
     """
     Update gain and profit for a completed operation
     ------------------------------------
     params:
-        Tuple[update_operation(UpdateOperation)]: 
-           0outocome(str), gain(float), profit(float), operation_id(int)
+        dataclass UpdateCompletedOperation: 
+           outocome(str), gain(float), 
+           profit(float), operation_id(int)
     ------------------------------------
     Example:
-        update_operations("ITP", 0.02, 50, 1784889912000)
+        update_completed_operations("ITP", 0.02, 50, 1784889912000)
     Using dataclass:
-        op = UpdateOperation(
+        op = UpdateCompletedOperation(
         outcome = "ITP",
         gain = 0.02,
         profit = 50,
         operation_id = 1784889912000
         )
-        update_operations(update_operation=op)
+        update_completed_operations(update_completed_operation=op)
     """
     query = """
-            UPDATE completed_operations (
-                outcome, gain, profit  
-            ) 
-            SET VALUES (?, ?, ?)
+            UPDATE completed_operations 
+            SET
+                outcome = ?,  
+                gain = ?, 
+                profit = ?
             WHERE operation_id = ?;
         """ 
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute(query, update_operation.as_tuple())
+            cursor.execute(query, update_completed_operation.as_tuple())
             conn.commit()
-            logger.info(f"🟢 [DB] record {update_operation.operation_id} updated in completed_operations table")
+            logger.info(f"🟢 [DB] record {update_completed_operation.operation_id} updated in completed_operations table")
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE UPDATE OP INSERTION FAILURE: {str(e)}")
+        logger.exception("Exception commited updating a completed operation")
         return False
 
     return True
 
+def update_partial_operations(update_partial_operation: UpdatePartialOperation) -> bool:
+    """
+    Update exit_date, exit_price, outcome and gain for a partial operation
+    ------------------------------------
+    params:
+        dataclass UpdatePartialOperation: 
+           exit_date(str), exit_price(float), outcome(str), 
+           gain(float), operation_id(int)
+    ------------------------------------
+    Example:
+        update_partial_operations("2026-07-25 00:00:00", 65000, "ITP", 0.02, 1784889912000)
+    Using dataclass:
+        op = UpdatePartialOperation(
+        exit_date = "2026-07-25 00:00:00",
+        exit_price = 65000
+        outcome = "ITP",
+        gain = 0.02,
+        operation_id = 1784889912000
+        )
+        update_partial_operations(update_partial_operation=op)
+    """
+    query = """
+            UPDATE partial_operations 
+            SET
+                exit_date = ?, 
+                exit_price = ?, 
+                outcome = ?, 
+                gain = ?   
+            WHERE operation_id = ?;
+        """ 
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, update_partial_operation.as_tuple())
+            conn.commit()
+            logger.info(f"🟢 [DB] record {update_partial_operation.operation_id} updated in partial_operations table")
+    except sqlite3.Error as e:
+        logger.error(f"❌ DATABASE UPDATE OP INSERTION FAILURE: {str(e)}")
+        logger.exception("Exception commited updating a partial operation")
+        return False
+
+    return True
+
+def reset_completed_operations():
+    """
+    Delete all records from completed_operations table
+    """
+    query = "DELETE FROM completed_operations;"
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(query)
+            conn.commit()
+            logger.info(f"❌ [DB] All records of completed_operations table was deleted")
+    except sqlite3.Error as e:
+            logger.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
+            traceback.print_exc()
+
+def reset_partial_operations():
+    """
+    Delete all records from partial_operations table
+    """
+    query = "DELETE FROM partial_operations;"
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(query)
+            conn.commit()
+            logger.info(f"❌ [DB] All records of partial_operations table was deleted")
+    except sqlite3.Error as e:
+            logger.error(f"❌ [DB] DATABASE COMP INSERTION FAILURE: {str(e)}")
+            traceback.print_exc()
 
 if __name__ == "__main__":
     init_operations_db()
