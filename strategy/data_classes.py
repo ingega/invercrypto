@@ -16,6 +16,7 @@ class DirectBet:
     entry_price: float
     tp: float
     sl: float
+    last_partial_id: int
 
     def as_json(self):
         return {
@@ -27,13 +28,15 @@ class DirectBet:
                 "side": self.side,
                 "entry_price": self.entry_price,
                 "tp": self.tp,
-                "sl": self.sl
+                "sl": self.sl,
+                "last_partial_id": self.last_partial_id
             }
         }
 
 @dataclass
 class SecondaryBet:
     ticker: str
+    last_partial_id: int
     operation_id: int
     capital: float
     colateral: float
@@ -48,6 +51,7 @@ class SecondaryBet:
     def as_json(self):
         return {
             self.ticker: {
+                "last_partial_id": self.last_partial_id,
                 "operation_id": self.operation_id,
                 "capital": self.capital,
                 "colateral": self.colateral,
@@ -134,7 +138,7 @@ class UpdatePartialOperation:
     exit_price: float
     outcome: str
     gain: float
-    operation_id: int
+    partial_id: int
 
     def as_tuple(self):
         return(
@@ -142,7 +146,7 @@ class UpdatePartialOperation:
             self.exit_price,
             self.outcome,
             self.gain,
-            self.operation_id
+            self.partial_id
         )
 
 

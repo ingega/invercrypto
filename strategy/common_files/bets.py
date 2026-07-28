@@ -7,7 +7,8 @@ from common_files.logger import get_logger
 # json and config files
 from common_files.paths import *
 # database operations
-from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation, UpdatePartialOperation
+from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation 
+from data_classes import UpdatePartialOperation
 from data_classes import SecondaryBet
 from database import save_operation_to_db, save_partial_operation_to_db, update_completed_operations, update_partial_operations
 # balance operations
@@ -54,7 +55,9 @@ class SecondaryBets:
         save_json_file(SECONDARY_BET_FILE, actual_secondary_bets_file)
         # retrieve ticker
         ticker = next(iter(secondary_dict))
-        logger.info(f"🟡 [SECONDARY BETS] ticker {ticker} was added to secondary bets file " )
+        data_value = secondary_dict[ticker]
+        logger.info(f"🟡 [SECONDARY BETS] ticker {ticker} was added to secondary "
+                    f" bets file with value: {data_value}")
 
     def remove_secondary_bet(self):
         if not self.ticker:
@@ -63,6 +66,27 @@ class SecondaryBets:
         actual_secondary_bets_file.pop(self.ticker)
         save_json_file(SECONDARY_BET_FILE, actual_secondary_bets_file)
         logger.info(f"☑️ [DIRECT BET FILE] ticker {self.ticker} was removed from actual bets file")
+
+    def update_secondary_bet(self,
+            actual_loss_percentage: float,
+            actual_side: str,
+            tp: float,
+            sl: float,
+            last_partial_id: int
+        ):
+        actual_partial_file = load_json_file(SECONDARY_BET_FILE)
+        data = {
+            "actual_loss_percentage": actual_loss_percentage,
+            "actual_side": actual_side,
+            "tp": tp,
+            "sl": sl,
+            "last_partial_id": last_partial_id
+        }
+        # update ticker data
+        actual_partial_file[self.ticker].update(data)
+        save_json_file(SECONDARY_BET_FILE, actual_partial_file)
+        logger.info(f"2️⃣ [SEC BET FILE] ticker {self.ticker} was uptated with these"
+                    f" new values: {data}")
 
 
 # aux secondary bet function
@@ -85,10 +109,12 @@ def flip_worlflow(ticker:str,
                   actual_side: str,
                   tp: float,
                   sl: float,
-                  partial_operation: PartialOperation
+                  update_partial_operation: UpdatePartialOperation,
+                  partial_operation: PartialOperation,
                   ):
     """
     This pipeline is executed when a position get a "flip" loss bet
+    1. Update partial_operation
     1. add partial_entry
     2. update vars in secondary_bets
         A. acummulated_loss
@@ -96,21 +122,22 @@ def flip_worlflow(ticker:str,
         C. Actual side
         D. new tp, sl
     """
-    # add partial_entry
-    save_partial_operation_to_db(partial_operation=partial_operation)
-    # 2. update vars in secondary_lost
+    # 1. update partial operation
+    update_partial_operations(update_partial_operation=update_partial_operation)
+    # 2. add partial_entry and retrieve new id
+    partial_id = save_partial_operation_to_db(partial_operation=partial_operation)
+    partial_id = 0 if not partial_id else partial_id
+    # 3. update vars in secondary_lost
     # get entry_date
     entry_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    secondary_file = load_json_file(SECONDARY_BET_FILE)
-    secondary_record = secondary_file[ticker]
-    secondary_record['actual_loss_percentage'] = acummulated_loss
-    secondary_record['entry_date'] = entry_date
-    secondary_record['actual_side'] = actual_side
-    secondary_record['tp'] = tp
-    secondary_record['sl'] = sl
-    # save to json again
-    secondary_file[ticker].update(secondary_record)
-    save_json_file(SECONDARY_BET_FILE, secondary_file)
+    update_sec_json = SecondaryBets()
+    update_sec_json.update_secondary_bet(
+        actual_loss_percentage=acummulated_loss,
+        actual_side=actual_side,
+        tp=tp,
+        sl=sl,
+        last_partial_id=partial_id
+    )
     logger.info(f"🟠 [SECONDARY BET] record {ticker} added to partial record with"
                 f"an acummulated loss of: {acummulated_loss} new side: {actual_side} at {entry_date}")
     
@@ -123,14 +150,20 @@ def calculate_profit(side: str, entry_price: float, close_price: float):
 
 # secondary bet workflow
 def secondary_bet_resolution(ticker: str,
-                             exit_price: float,
+                            exit_price: float,
                             outcome: str,
                             gain: float,
                             operation_id: int,
-                            capital: float
+                            capital: float, 
+                            flip: bool,
+                            acummulated_loss: float = 0,
+                            actual_side: str = "UNDEFINED",
+                            tp: float = 0,
+                            sl: float = 0,
+                            partial_operation: PartialOperation | None = None
                              ):
     """
-    Executes a pipeline if a secondary bet is resolved
+    Executes a pipeline if a secondary bet is resolved or flips
     1. update partial operation.
     2. Update completed operation.
     3. Update main balance.
@@ -141,14 +174,16 @@ def secondary_bet_resolution(ticker: str,
     # 1. update partial record
     # get or calculate necessary data
     logger.info(f"2️⃣ [SEC BET] secondary bet resulution for {ticker} with outcome"
-                f" {outcome} starts here\n{'*' * 20}")
+                f" {outcome} starts here\n{'*' * 50}")
     exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # get partial id
+    partial_id = load_json_file(SECONDARY_BET_FILE)[ticker]["last_partial_id"]
     update_partial_record = UpdatePartialOperation(
         exit_date=exit_date,
         exit_price=exit_price,
         outcome=outcome,
         gain=gain,
-        operation_id=operation_id
+        partial_id=partial_id
     )
     update_partial_operations(update_partial_operation=update_partial_record)
     # 2. update completed operation
@@ -171,7 +206,7 @@ def secondary_bet_resolution(ticker: str,
     secondary_bet = SecondaryBets(ticker=ticker)
     secondary_bet.remove_secondary_bet()
     logger.info(f"2️⃣ [SEC BET] secondary bet resulution for {ticker} with outcome"
-                    f" {outcome} ends here\n{'*' * 20}")
+                    f" {outcome} ends here\n{'*' * 50}")
 
 # secondary bet function
 def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
@@ -217,7 +252,8 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 outcome="TIE",
                 gain=gain,
                 operation_id=operation_id,
-                capital=capital
+                capital=capital,
+                flip=False
             )
             logger.warning(f"⏱️ TIME TIE CONSTRAINT BREACHED: Liquidating cycle for {ticker}.")
             continue
@@ -242,7 +278,8 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 outcome="TP",
                 gain=tp_gain,
                 operation_id=operation_id,
-                capital=capital
+                capital=capital,
+                flip=False
             )
             logger.info(f"🏆 SECONDARY CYCLE RESOLVED (TP): {ticker} cleared debt structure.")
         elif outcome == "SL":
@@ -260,7 +297,8 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                     outcome="SL",
                     gain=-total_loss_pct,
                     operation_id=operation_id,
-                    capital=capital
+                    capital=capital,
+                    flip=False
                 )
                 logger.error(f"🆘 ABSOLUTE LOSS BREACHED: Killing cycle for {ticker}. Final Outcome: SL.")
                 continue
@@ -325,12 +363,14 @@ def tp_outcome_workflow(ticker: str,
     )
     update_completed_operations(update_completed_operation=completed_record)
     # 2. Update partial operation
+    # retrieve last id
+    partial_id = load_json_file(BET_FILE)[ticker]["last_partial_id"]
     partial_operation = UpdatePartialOperation(
         exit_date=exit_date,
         exit_price=exit_price,
         outcome="TP",
         gain=gain,
-        operation_id=operation_id
+        partial_id=partial_id
     )
     update_partial_operations(update_partial_operation=partial_operation)
     # 3. update main balance
@@ -352,10 +392,12 @@ def sl_outcome_workflow(ticker: str,
                         sl: float,
                         capital: float,
                         gain: float, 
-                        operation_id: int):
+                        operation_id: int,
+                        partial_operation: PartialOperation):
     """
     If direct bet hits sl, the workflow is:
         1. Update partial_operation
+        2. Add a new partial_operation
         2. Add secondary_bet
         3. remove ticker from direct_bet
     """
@@ -363,17 +405,22 @@ def sl_outcome_workflow(ticker: str,
                 f" starts with operation id {operation_id}\n{'*' * 50}")
     # 1. update partial_operation
     exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    partial_id = load_json_file(BET_FILE)[ticker]['last_partial_id']
     update_partial_operation = UpdatePartialOperation(
         exit_date=exit_date,
         exit_price=exit_price,
         outcome="SL",
         gain=gain,
-        operation_id=operation_id
+        partial_id=partial_id
     )
     update_partial_operations(update_partial_operation=update_partial_operation)
+    # add a new partial operation, and get the last_partial_id
+    last_partial_id = save_partial_operation_to_db(partial_operation=partial_operation)
+    last_partial_id = 0 if not last_partial_id else last_partial_id
     # 2. Add record to secondary_bet
     colateral = calculate_colateral(capital=capital)
     entry_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # get the last partial id
     secondary_record = SecondaryBet(
         ticker=ticker,
         operation_id=operation_id,
@@ -385,7 +432,8 @@ def sl_outcome_workflow(ticker: str,
         cycle_start_time=entry_date,
         actual_side=actual_side,
         tp=tp,
-        sl=sl
+        sl=sl,
+        last_partial_id=last_partial_id
     )
     secondary_bet = SecondaryBets(secondary_bet=secondary_record)
     secondary_bet.add_secondary_bet()
@@ -462,6 +510,20 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                 tp, sl = calculate_flip_brackets(side=new_side,
                                                  entry_price=exit_price,
                                                  total_loss_pct=acummulated_loss)
+                # add partial_operation_data
+                partial_operation = PartialOperation(
+                    operation_id=operation_id,
+                    entry_date=entry_date,
+                    side=new_side,
+                    entry_price=sl,
+                    tp=tp,
+                    sl=sl,
+                    exit_date=entry_date,
+                    exit_price=entry_price,
+                    outcome="UNRESOLVED",
+                    gain=0,
+                    bet="I"
+                )
                 sl_outcome_workflow(
                     ticker=ticker,
                     entry_price=entry_price,
@@ -472,7 +534,8 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                     sl=sl,
                     capital=capital,
                     gain=-acummulated_loss,
-                    operation_id=operation_id
+                    operation_id=operation_id,
+                    partial_operation=partial_operation
                 )
                 logger.info(f"📢 TICKER SL: {ticker} hit {outcome} at {current_price}")
             

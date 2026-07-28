@@ -69,7 +69,7 @@ def init_operations_db() -> None:
         """)
         conn.commit()
 
-def save_operation_to_db(operation: CompletedOperation) -> bool:
+def save_operation_to_db(operation: CompletedOperation) -> int | None:
     """
     Safely records a resolved direct bet into the SQLite data layer.
     """
@@ -78,6 +78,7 @@ def save_operation_to_db(operation: CompletedOperation) -> bool:
             operation_id, strategy, ticker, outcome, gain, capital, profit  
         ) VALUES (?, ?, ?, ?, ?, ?, ?);
     """ 
+    print("operation id debug:", operation.operation_id)
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
@@ -85,13 +86,12 @@ def save_operation_to_db(operation: CompletedOperation) -> bool:
             conn.commit()
             logger.info(f"🟢 [DB] record for {operation.ticker} added to completed_operations" 
                         f" table with operation_id {operation.operation_id}")
+            return cursor.lastrowid
     except sqlite3.Error as e:
        logger.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
-       traceback.print_exc()
-       return False
-    return True
+       return 0
 
-def save_partial_operation_to_db(partial_operation: PartialOperation) -> bool:
+def save_partial_operation_to_db(partial_operation: PartialOperation) -> int | None:
     """
     Safely records a resolved direct bet into the SQLite data layer.
     """
@@ -108,10 +108,10 @@ def save_partial_operation_to_db(partial_operation: PartialOperation) -> bool:
             conn.commit()
             logger.info("🟢 [DB] record added to partial_operations table with"
                         f" operation id: {partial_operation.operation_id}")
+            return cursor.lastrowid
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE PARTIAL OP INSERTION FAILURE: {str(e)}")
-        return False
-    return True
+        return 0
 
 def update_completed_operations(update_completed_operation: UpdateCompletedOperation) -> bool:
     """
@@ -161,7 +161,7 @@ def update_partial_operations(update_partial_operation: UpdatePartialOperation) 
     params:
         dataclass UpdatePartialOperation: 
            exit_date(str), exit_price(float), outcome(str), 
-           gain(float), operation_id(int)
+           gain(float), id(int)
     ------------------------------------
     Example:
         update_partial_operations("2026-07-25 00:00:00", 65000, "ITP", 0.02, 1784889912000)
@@ -171,7 +171,7 @@ def update_partial_operations(update_partial_operation: UpdatePartialOperation) 
         exit_price = 65000
         outcome = "ITP",
         gain = 0.02,
-        operation_id = 1784889912000
+        id = 200
         )
         update_partial_operations(update_partial_operation=op)
     """
@@ -182,14 +182,15 @@ def update_partial_operations(update_partial_operation: UpdatePartialOperation) 
                 exit_price = ?, 
                 outcome = ?, 
                 gain = ?   
-            WHERE operation_id = ?;
+            WHERE id = ?;
         """ 
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(query, update_partial_operation.as_tuple())
             conn.commit()
-            logger.info(f"🟢 [DB] record {update_partial_operation.operation_id} updated in partial_operations table")
+            logger.info(f"🟢 [DB] record {update_partial_operation.partial_id} updated "
+                        f"in partial_operations table")
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE UPDATE OP INSERTION FAILURE: {str(e)}")
         logger.exception("Exception commited updating a partial operation")

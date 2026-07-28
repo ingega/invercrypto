@@ -81,7 +81,8 @@ def add_entry(ticker:str, side:str, entry_price: float):
         gain=0,
         bet="D"
     )
-    save_partial_operation_to_db(partial_operation=partial_record)
+    partial_operation_id = save_partial_operation_to_db(partial_operation=partial_record)
+    partial_operation_id = 0 if not partial_operation_id else partial_operation_id
     # 5. add entry to direct bets json file
     direct_bet_file = load_json_file(BET_FILE)
     # build the json payload
@@ -94,7 +95,8 @@ def add_entry(ticker:str, side:str, entry_price: float):
         side=side,
         entry_price=entry_price,
         tp=tp,
-        sl=sl
+        sl=sl,
+        last_partial_id=partial_operation_id
     )
     direct_bet_file.update(direct_bet_record.as_json())
     save_json_file(BET_FILE, direct_bet_file)
