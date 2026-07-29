@@ -88,7 +88,7 @@ def reduce_available_balance(colateral: float) -> float:
     logger.info(f"🏛️  [AVAILABLE BALANCE] The available balance remains in {remain_balance: .2f}")
     return remain_balance
 
-def update_available_balance(capital: float) -> float:
+def update_available_balance(gain: float, capital: float) -> float:
     """
     This function add the capital (positive or negative) to the
     available balance
@@ -99,14 +99,17 @@ def update_available_balance(capital: float) -> float:
     returns:
         final_balance(float): final available_balance for next position
     Example:
-        - If the actual available balance is 1000, and capital is 200, the available_balance is
+        - If the actual available balance is 1000, and profit is 200, the available_balance is
         updated to 1200, function returns 1200
-        - If the actual available balance is 1000, and capital is -200, the available_balance
+        - If the actual available balance is 1000, and profit is -200, the available_balance
         is updated to 800, function returns 800
     """
+    # calculates the profit first
+    leverage = load_json_file(CONFIG_FILE)["leverage"]
+    profit = gain * leverage * capital
     available_balance = load_json_file(AVAILABLE_BALANCE)
     actual_balance = available_balance["available_balance"]
-    updated_balance = actual_balance + capital
+    updated_balance = actual_balance + profit
     available_balance["available_balance"] = updated_balance
     save_json_file(AVAILABLE_BALANCE, available_balance)
     logger.info(f"🏛️  [AVAILABLE BALANCE] The updated available balance is {updated_balance: .2f}")

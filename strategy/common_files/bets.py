@@ -199,7 +199,7 @@ def secondary_bet_resolution(ticker: str,
     # 3. update main balance
     update_main_balance(gain=gain, capital=capital)
     # 4. update available balance
-    update_available_balance(capital=capital)
+    update_available_balance(gain=gain, capital=capital)
     # 5. update ticker balance
     update_ticker_balance(ticker=ticker, gain=gain)
     # 6. remove ticker from secodary bet
@@ -341,7 +341,8 @@ def tp_outcome_workflow(ticker: str,
                         exit_price: float,
                         gain: float, 
                         capital: float, 
-                        operation_id: int):
+                        operation_id: int
+                        ):
     """
     Auxiliary function for tp direct bet result
     The workflow is this:
@@ -376,7 +377,7 @@ def tp_outcome_workflow(ticker: str,
     # 3. update main balance
     update_main_balance(gain=gain, capital=capital)
     # 4. update available balance
-    update_available_balance(capital=capital)
+    update_available_balance(gain=gain, capital=capital)
     # 5. update ticker balance
     update_ticker_balance(ticker=ticker, gain=gain)
     # 6. remove ticket from direct bet
