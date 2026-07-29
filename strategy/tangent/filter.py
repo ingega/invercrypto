@@ -98,10 +98,12 @@ def add_entry(ticker:str, side:str, entry_price: float):
         sl=sl,
         last_partial_id=partial_operation_id
     )
-    direct_bet_file.update(direct_bet_record.as_json())
+    json_bet = direct_bet_record.as_json()
+    direct_bet_file.update(json_bet)
     save_json_file(BET_FILE, direct_bet_file)
     # finally inform
-    logger.info(f"↩️ record {ticker} was added to actual bets file")
+    logger.info(f"↩️ record was added to actual bets file with this value"
+                f"{json_bet}")
 
 def scan_tangent_opportunities():
     config = load_json_file(CONFIG_FILE)

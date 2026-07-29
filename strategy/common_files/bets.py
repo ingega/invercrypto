@@ -10,7 +10,7 @@ from common_files.paths import *
 from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation 
 from data_classes import UpdatePartialOperation
 from data_classes import SecondaryBet
-from database import save_operation_to_db, save_partial_operation_to_db, update_completed_operations, update_partial_operations
+from database import save_partial_operation_to_db, update_completed_operations, update_partial_operations
 # balance operations
 from common_files.balances import calculate_net_profit, update_available_balance 
 from common_files.balances import update_main_balance, update_ticker_balance, calculate_colateral
@@ -84,9 +84,10 @@ class SecondaryBets:
         }
         # update ticker data
         actual_partial_file[self.ticker].update(data)
+        operation_id = actual_partial_file[self.ticker]["operation_id"]
         save_json_file(SECONDARY_BET_FILE, actual_partial_file)
-        logger.info(f"2️⃣ [SEC BET FILE] ticker {self.ticker} was uptated with these"
-                    f" new values: {data}")
+        logger.info(f"2️⃣ [SEC BET FILE] ticker {self.ticker} in operation id: " 
+                    f"{operation_id} was uptated with these new values: {data}")
 
 
 # aux secondary bet function
@@ -227,6 +228,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
         tp = bet["tp"]
         sl = bet["sl"]
         operation_id = bet["operation_id"]
+        last_partial_id = bet["last_partial_id"]
         capital = bet["capital"]
         # 1. 24-Hour Time-Expiration (TIE) Safety Engine Check
         start_time = datetime.strptime(bet["cycle_start_time"], "%Y-%m-%d %H:%M:%S")
@@ -314,13 +316,22 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 gain=this_leg_loss,
                 bet="I"
             )
+            # pipeline updated the previus partial operation as well
+            update_partial_operation = UpdatePartialOperation(
+                exit_date=exit_date,
+                exit_price=sl,
+                outcome="SL",
+                gain=this_leg_loss,
+                partial_id=last_partial_id
+            )
             flip_worlflow(
                 ticker=ticker,
                 acummulated_loss=total_loss_pct,
                 actual_side=flipped_side,
                 tp=new_tp,
                 sl=new_sl,
-                partial_operation=partial_operation
+                partial_operation=partial_operation,
+                update_partial_operation = update_partial_operation
             )
             logger.warning(f"🔄 LEG FLIP COMPLETED: {ticker} transitioned to new leg. Total Debt: {total_loss_pct*100:.2f}%")
         else:
@@ -501,7 +512,7 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                 # add the values
                 acummulated_loss = config["direct_bet_percentage"] + config["commission"]
                 # the side must flip
-                new_side = "SELL" if side == "BUY" else "SELL"
+                new_side = "SELL" if side == "BUY" else "BUY"
                 # sl, and tp must be calculated with flip function
                 tp, sl = calculate_flip_brackets(side=new_side,
                                                  entry_price=exit_price,
