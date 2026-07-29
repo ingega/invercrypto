@@ -79,7 +79,7 @@ def reduce_available_balance(colateral: float) -> float:
         postion is 50, then, the available_balance for next position is 1450
     =======================================
     """
-    # get the actual available balalce
+    # get the actual available balance
     available_balance = load_json_file(AVAILABLE_BALANCE)
     actual_available_balance = available_balance["available_balance"]
     remain_balance = actual_available_balance - colateral
@@ -88,7 +88,7 @@ def reduce_available_balance(colateral: float) -> float:
     logger.info(f"🏛️  [AVAILABLE BALANCE] The available balance remains in {remain_balance: .2f}")
     return remain_balance
 
-def update_available_balance(gain: float, capital: float) -> float:
+def update_available_balance(gain: float, capital: float, colateral: float) -> float:
     """
     This function add the capital (positive or negative) to the
     available balance
@@ -109,7 +109,7 @@ def update_available_balance(gain: float, capital: float) -> float:
     profit = gain * leverage * capital
     available_balance = load_json_file(AVAILABLE_BALANCE)
     actual_balance = available_balance["available_balance"]
-    updated_balance = actual_balance + profit
+    updated_balance = actual_balance + profit + colateral
     available_balance["available_balance"] = updated_balance
     save_json_file(AVAILABLE_BALANCE, available_balance)
     logger.info(f"🏛️  [AVAILABLE BALANCE] The updated available balance is {updated_balance: .2f}")

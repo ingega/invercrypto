@@ -155,12 +155,6 @@ def secondary_bet_resolution(ticker: str,
                             gain: float,
                             operation_id: int,
                             capital: float, 
-                            flip: bool,
-                            acummulated_loss: float = 0,
-                            actual_side: str = "UNDEFINED",
-                            tp: float = 0,
-                            sl: float = 0,
-                            partial_operation: PartialOperation | None = None
                              ):
     """
     Executes a pipeline if a secondary bet is resolved or flips
@@ -199,7 +193,9 @@ def secondary_bet_resolution(ticker: str,
     # 3. update main balance
     update_main_balance(gain=gain, capital=capital)
     # 4. update available balance
-    update_available_balance(gain=gain, capital=capital)
+    # get colateral
+    colateral = load_json_file(SECONDARY_BET_FILE)[ticker]["colateral"]
+    update_available_balance(gain=gain, capital=capital, colateral=colateral)
     # 5. update ticker balance
     update_ticker_balance(ticker=ticker, gain=gain)
     # 6. remove ticker from secodary bet
@@ -252,8 +248,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 outcome="TIE",
                 gain=gain,
                 operation_id=operation_id,
-                capital=capital,
-                flip=False
+                capital=capital
             )
             logger.warning(f"⏱️ TIME TIE CONSTRAINT BREACHED: Liquidating cycle for {ticker}.")
             continue
@@ -278,8 +273,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 outcome="TP",
                 gain=tp_gain,
                 operation_id=operation_id,
-                capital=capital,
-                flip=False
+                capital=capital
             )
             logger.info(f"🏆 SECONDARY CYCLE RESOLVED (TP): {ticker} cleared debt structure.")
         elif outcome == "SL":
@@ -295,10 +289,9 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                     ticker=ticker,
                     exit_price=sl,
                     outcome="SL",
-                    gain=-total_loss_pct,
+                    gain=total_loss_pct,
                     operation_id=operation_id,
                     capital=capital,
-                    flip=False
                 )
                 logger.error(f"🆘 ABSOLUTE LOSS BREACHED: Killing cycle for {ticker}. Final Outcome: SL.")
                 continue
@@ -377,7 +370,9 @@ def tp_outcome_workflow(ticker: str,
     # 3. update main balance
     update_main_balance(gain=gain, capital=capital)
     # 4. update available balance
-    update_available_balance(gain=gain, capital=capital)
+    # get colateral
+    colateral = load_json_file(BET_FILE)[ticker]["colateral"]
+    update_available_balance(gain=gain, capital=capital, colateral=colateral)
     # 5. update ticker balance
     update_ticker_balance(ticker=ticker, gain=gain)
     # 6. remove ticket from direct bet
