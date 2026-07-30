@@ -516,7 +516,7 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                 # the side must flip
                 new_side = "SELL" if side == "BUY" else "BUY"
                 # sl, and tp must be calculated with flip function
-                tp, sl = calculate_flip_brackets(side=new_side,
+                secondary_tp, secondary_sl = calculate_flip_brackets(side=new_side,
                                                  entry_price=exit_price,
                                                  total_loss_pct=acummulated_loss)
                 # add partial_operation_data, the entry date is current time
@@ -525,8 +525,8 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                     entry_date=current_time_str,
                     side=new_side,
                     entry_price=sl,
-                    tp=tp,
-                    sl=sl,
+                    tp=secondary_tp,
+                    sl=secondary_sl,
                     exit_date=entry_date,
                     exit_price=entry_price,
                     outcome="UNRESOLVED",
@@ -539,8 +539,8 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                     exit_price=exit_price,
                     loss_percentage=acummulated_loss,
                     actual_side=new_side,
-                    tp=tp,
-                    sl=sl,
+                    tp=secondary_tp,
+                    sl=secondary_sl,
                     capital=capital,
                     gain=-acummulated_loss,
                     operation_id=operation_id,
