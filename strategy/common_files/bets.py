@@ -48,7 +48,9 @@ class SecondaryBets:
 
     def add_secondary_bet(self):
         if not self.data:
-            raise DataError("Add a ticker to secondary_bets.json file, requires parameter secondary_bet")
+            raise DataError(
+                "Add a ticker to secondary_bets.json file, requires parameter secondary_bet"
+                )
         secondary_dict = self.data.as_json()
         actual_secondary_bets_file = load_json_file(SECONDARY_BET_FILE)
         actual_secondary_bets_file.update(secondary_dict)
@@ -131,7 +133,7 @@ def flip_worlflow(ticker:str,
     # 3. update vars in secondary_lost
     # get entry_date
     entry_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    update_sec_json = SecondaryBets()
+    update_sec_json = SecondaryBets(ticker=ticker)
     update_sec_json.update_secondary_bet(
         actual_loss_percentage=acummulated_loss,
         actual_side=actual_side,
