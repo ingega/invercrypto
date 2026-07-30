@@ -517,10 +517,10 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                 tp, sl = calculate_flip_brackets(side=new_side,
                                                  entry_price=exit_price,
                                                  total_loss_pct=acummulated_loss)
-                # add partial_operation_data
+                # add partial_operation_data, the entry date is current time
                 partial_operation = PartialOperation(
                     operation_id=operation_id,
-                    entry_date=entry_date,
+                    entry_date=current_time_str,
                     side=new_side,
                     entry_price=sl,
                     tp=tp,
@@ -533,7 +533,7 @@ def check_active_bets_resolution(current_prices_dict: List[dict]) -> None:
                 )
                 sl_outcome_workflow(
                     ticker=ticker,
-                    entry_price=entry_price,
+                    entry_price=sl,
                     exit_price=exit_price,
                     loss_percentage=acummulated_loss,
                     actual_side=new_side,
