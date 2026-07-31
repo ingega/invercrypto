@@ -146,7 +146,32 @@ def update_completed_operations(update_completed_operation: UpdateCompletedOpera
             cursor = conn.cursor()
             cursor.execute(query, update_completed_operation.as_tuple())
             conn.commit()
-            logger.info(f"🟢 [DB] record {update_completed_operation.operation_id} updated in completed_operations table")
+            # get the entire updated record
+            select_query = """
+                        SELECT * FROM completed_operations
+                        WHERE operation_id = ? 
+                    """
+            # execute query
+            cursor.execute(
+                select_query,
+                (update_completed_operation.operation_id,)
+            )
+
+            record = cursor.fetchone()
+            # record is a list with id, operation_id, strategy, ticker, outcome, gain, capital, profit
+            record_dict = {
+                "id": record[0],
+                "operation_id": record[1],
+                "strategy": record[2],
+                "ticker": record[3],
+                "outcome": record[4],
+                "gain": record[5],
+                "capital": record[6],
+                "profit": record[7]
+            }
+            
+            logger.info(f"🟢 [DB] record {update_completed_operation.operation_id} "
+                        f"updated in completed_operations table with values: {record_dict}")
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE UPDATE OP INSERTION FAILURE: {str(e)}")
         logger.exception("Exception commited updating a completed operation")
@@ -189,8 +214,33 @@ def update_partial_operations(update_partial_operation: UpdatePartialOperation) 
             cursor = conn.cursor()
             cursor.execute(query, update_partial_operation.as_tuple())
             conn.commit()
+            # retrieve the entire record
+            updated_query = """
+                SELECT * FROM partial_operations
+                WHERE id = ?;
+            """
+            cursor.execute(updated_query, 
+                           (update_partial_operation.partial_id,)
+                           )
+            record = cursor.fetchone()
+            # format exit data, the fields are:  id, operation_id, entry_date, side, entry_price, tp, sl, exit_date, exit_price
+            # outcome, gain, bet
+            data_result = {
+                "id": record[0],
+                "operation_id": record[1],
+                "entry_date": record[2],
+                "side": record[3],
+                "entry_price": record[4],
+                "tp": record[5],
+                "sl": record[6],
+                "exit_date": record[7],
+                "exit_price": record[8],
+                "outcome": record[9],
+                "gain": record[10],
+                "bet": record[11]
+            }
             logger.info(f"🟢 [DB] record {update_partial_operation.partial_id} updated "
-                        f"in partial_operations table")
+                                    f"in partial_operations table with final values: {data_result}")
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE UPDATE OP INSERTION FAILURE: {str(e)}")
         logger.exception("Exception commited updating a partial operation")
@@ -228,6 +278,18 @@ def reset_partial_operations():
             logger.error(f"❌ [DB] DATABASE COMP INSERTION FAILURE: {str(e)}")
             traceback.print_exc()
 
+def main():
+    from data_classes import UpdatePartialOperation
+    partial_operation = UpdatePartialOperation(
+        exit_date="2026-07-31 00:00:00",
+        exit_price=510.0,
+        outcome="TEST_OUTCOME",
+        gain=0.1,
+        partial_id=1839
+    )
+    update_partial_operations(update_partial_operation=partial_operation)
+
 if __name__ == "__main__":
-    init_operations_db()
-    print("database already created")
+    # init_operations_db()
+    # print("database already created")
+    main()

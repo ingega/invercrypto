@@ -86,10 +86,11 @@ class SecondaryBets:
         }
         # update ticker data
         actual_partial_file[self.ticker].update(data)
+        final_data = actual_partial_file[self.ticker]
         operation_id = actual_partial_file[self.ticker]["operation_id"]
         save_json_file(SECONDARY_BET_FILE, actual_partial_file)
         logger.info(f"2️⃣ [SEC BET FILE] ticker {self.ticker} in operation id: " 
-                    f"{operation_id} was uptated with these new values: {data}")
+                    f"{operation_id} was uptated with these new values: {final_data}")
 
 
 # aux secondary bet function
@@ -281,8 +282,8 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             )
             logger.info(f"🏆 SECONDARY CYCLE RESOLVED (TP): {ticker} cleared debt structure.")
         elif outcome == "SL":
-            # Add relative distance of this leg's failure to our global debt metric
-            this_leg_loss = abs(bet["entry_price"] - sl) / bet["entry_price"]
+            # sl flipped is sec_bet + commission
+            this_leg_loss = -config["flip_percentage"] - config["commission"]
             total_loss_pct = bet["actual_loss_percentage"] + this_leg_loss
             # 2. 10% Absolute Risk Circuit Breaker Check
             if total_loss_pct >= config["sl_percentage"]:
@@ -304,10 +305,10 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             flipped_side = "SELL" if side == "BUY" else "BUY"
             new_tp, new_sl = calculate_flip_brackets(flipped_side, sl, total_loss_pct)
             # flipped pipeline
-            # the entry_date is bet entry_date, and exit_date is current_time
+            # the entry_date for a new record is current time, and exit_date same (later is updated)
             partial_operation = PartialOperation(
                 operation_id=operation_id,
-                entry_date=entry_date,
+                entry_date=exit_date,
                 side=flipped_side,
                 entry_price=entry_price,
                 tp=new_tp,
@@ -557,11 +558,9 @@ def reset_bets():
     logger.info(f"🧹 [BET] All bets was removed")
 
 def main():
-    ticker = '1000PEPEUSDT'
-    acummualated_loss = 0.02
-    actual_side = "BUY"
-    tp = 0.003
-    sl = 0.001
+    config = load_json_file(CONFIG_FILE)
+    this_leg_loss = -config["flip_percentage"] - config["commission"]
+    print(this_leg_loss)
 
 if __name__ == '__main__':
     main()
