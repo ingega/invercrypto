@@ -306,6 +306,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             new_tp, new_sl = calculate_flip_brackets(flipped_side, sl, total_loss_pct)
             # flipped pipeline
             # the entry_date for a new record is current time, and exit_date same (later is updated)
+            # for the new record, the outcome is UNRESOLVED and gain is 0, exit price is the same for entry
             partial_operation = PartialOperation(
                 operation_id=operation_id,
                 entry_date=exit_date,
@@ -314,9 +315,9 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 tp=new_tp,
                 sl=new_sl,
                 exit_date=exit_date,
-                exit_price=sl,
-                outcome="SL",
-                gain=-this_leg_loss,
+                exit_price=entry_price,
+                outcome="UNRESOLVED",
+                gain=0,
                 bet="I"
             )
             # pipeline updated the previus partial operation as well
