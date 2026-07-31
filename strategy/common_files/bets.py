@@ -157,6 +157,7 @@ def secondary_bet_resolution(ticker: str,
                             exit_price: float,
                             outcome: str,
                             gain: float,
+                            leg_gain: float,
                             operation_id: int,
                             capital: float, 
                              ):
@@ -176,17 +177,19 @@ def secondary_bet_resolution(ticker: str,
     exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # get partial id
     partial_id = load_json_file(SECONDARY_BET_FILE)[ticker]["last_partial_id"]
+    # the record is updated with leg_gain
     update_partial_record = UpdatePartialOperation(
         exit_date=exit_date,
         exit_price=exit_price,
         outcome=outcome,
-        gain=gain,
+        gain=leg_gain,
         partial_id=partial_id
     )
     update_partial_operations(update_partial_operation=update_partial_record)
     # 2. update completed operation
     # add missing values
     profit = calculate_net_profit(gain=gain, capital=capital)
+    # in this case, is net gain
     update_operation_record = UpdateCompletedOperation(
         outcome=outcome,
         gain=gain,
@@ -247,11 +250,13 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             # example: this_leg_profit: -1%, accumulated profit: 2%, net=-1%-2%=-3%
             gain = bet["actual_loss_percentage"] - leg_profit
             # call the resolution pipeline
+            # in this case, leg_gain is for partial operation, and gain for completed operation
             secondary_bet_resolution(
                 ticker=ticker,
                 exit_price=exit_price,
                 outcome="TIE",
                 gain=gain,
+                leg_gain=leg_profit,
                 operation_id=operation_id,
                 capital=capital
             )
@@ -271,12 +276,15 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
         if outcome == "TP":
             # actually is tp - commission
             tp_gain = config["profit_percentage"] - config["commision"] # gain
+            # this leg gain, is tp_gain - actual_loss_precentage
+            tp_leg_gain = tp_gain - config["sl_percentage"]
             # execute secondary resolved pipeline
             secondary_bet_resolution(
                 ticker=ticker,
                 exit_price=tp,
                 outcome="TP",
                 gain=tp_gain,
+                leg_gain=tp_leg_gain,
                 operation_id=operation_id,
                 capital=capital
             )
@@ -295,6 +303,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                     exit_price=sl,
                     outcome="SL",
                     gain=total_loss_pct,
+                    leg_gain=this_leg_loss,
                     operation_id=operation_id,
                     capital=capital,
                 )
