@@ -283,7 +283,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             logger.info(f"🏆 SECONDARY CYCLE RESOLVED (TP): {ticker} cleared debt structure.")
         elif outcome == "SL":
             # sl flipped is sec_bet + commission
-            this_leg_loss = -config["flip_percentage"] - config["commission"]
+            this_leg_loss = config["flip_percentage"] + config["commission"]
             total_loss_pct = bet["actual_loss_percentage"] + this_leg_loss
             # 2. 10% Absolute Risk Circuit Breaker Check
             if total_loss_pct >= config["sl_percentage"]:
@@ -316,7 +316,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 exit_date=exit_date,
                 exit_price=sl,
                 outcome="SL",
-                gain=this_leg_loss,
+                gain=-this_leg_loss,
                 bet="I"
             )
             # pipeline updated the previus partial operation as well
