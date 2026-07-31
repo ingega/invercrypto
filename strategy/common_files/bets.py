@@ -324,7 +324,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
                 exit_date=exit_date,
                 exit_price=sl,
                 outcome="SL",
-                gain=this_leg_loss,
+                gain=-this_leg_loss,
                 partial_id=last_partial_id
             )
             flip_worlflow(
