@@ -13,22 +13,6 @@ jobs:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
       
-      - name: Run Live Engine with CloudWatch
-        run: |
-          # Stop old container if running
-          docker stop invercrypto-live || true
-          docker rm invercrypto-live || true
-          
-          # Run with AWS Logs Driver
-          docker run -d --name invercrypto-live \
-            --log-driver=awslogs \
-            --log-opt awslogs-region=sa-east-1 \
-            --log-opt awslogs-group=/invercrypto/production-engine \
-            --log-opt awslogs-stream=live-stream \
-            --log-opt awslogs-create-group=true \
-            --env-file .env \
-            invercrypto:latest
-
       - name: Deploy Strategy via SSH to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -78,18 +62,21 @@ jobs:
             docker stop invercrypto-live || true
             docker rm invercrypto-live || true
 
-            echo "🚀 Launching live automated strategy instance..."
+            echo "🚀 Launching live automated strategy instance with CloudWatch Streams..."
             docker run -d \
               --name invercrypto-live \
               --restart unless-stopped \
+              --log-driver=awslogs \
+              --log-opt awslogs-region=sa-east-1 \
+              --log-opt awslogs-group=/invercrypto/production-engine \
+              --log-opt awslogs-stream=live-stream \
+              --log-opt awslogs-create-group=true \
               --env-file .env \
               -v $TARGET_DIR/data:/app/data \
               invercrypto-engine
 
-            echo "🦅 Live Engine online! Sampling execution diagnostics:"
-            sleep 3
-            docker logs --tail 20 invercrypto-live
-
+            echo "🦅 Live Engine online! (Logs are now routing directly to AWS CloudWatch)"
+            
             # =========================================================================
             # 🧹 SAFE PRODUCTION DISK CLEANUP PROTOCOL
             # =========================================================================
