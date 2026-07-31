@@ -307,15 +307,16 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             # flipped pipeline
             # the entry_date for a new record is current time, and exit_date same (later is updated)
             # for the new record, the outcome is UNRESOLVED and gain is 0, exit price is the same for entry
+            # but the entry_price, is actually the last sl
             partial_operation = PartialOperation(
                 operation_id=operation_id,
                 entry_date=exit_date,
                 side=flipped_side,
-                entry_price=entry_price,
+                entry_price=sl,
                 tp=new_tp,
                 sl=new_sl,
                 exit_date=exit_date,
-                exit_price=entry_price,
+                exit_price=sl,
                 outcome="UNRESOLVED",
                 gain=0,
                 bet="I"

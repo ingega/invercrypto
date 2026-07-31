@@ -84,8 +84,18 @@ def save_operation_to_db(operation: CompletedOperation) -> int | None:
             cursor = conn.cursor()
             cursor.execute(query, operation.as_tuple())
             conn.commit()
+            # prepare data for logger
+            data_exit = {
+                "operation_id": operation.operation_id,
+                "strategy": operation.strategy,
+                "ticker": operation.ticker,
+                "outcome": operation.outcome,
+                "gain": operation.gain,
+                "capital": operation.capital,
+                "profit": operation.profit
+            }
             logger.info(f"🟢 [DB] record for {operation.ticker} added to completed_operations" 
-                        f" table with operation_id {operation.operation_id}")
+                        f" table with values: {data_exit} ")
             return cursor.lastrowid
     except sqlite3.Error as e:
        logger.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
@@ -106,8 +116,22 @@ def save_partial_operation_to_db(partial_operation: PartialOperation) -> int | N
             cursor = conn.cursor()
             cursor.execute(query, partial_operation.as_tuple())
             conn.commit()
+            # prepare data for logger
+            data_exit = {
+                "operation_id": partial_operation.operation_id,
+                "entry_date": partial_operation.entry_date,
+                "side": partial_operation.side,
+                "entry_price": partial_operation.entry_price,
+                "tp": partial_operation.tp,
+                "sl": partial_operation.sl,
+                "exit_date": partial_operation.exit_date,
+                "exit_price": partial_operation.exit_price,
+                "outcome": partial_operation.outcome,
+                "gain": partial_operation.gain,
+                "bet": partial_operation.bet
+            }
             logger.info("🟢 [DB] record added to partial_operations table with"
-                        f" operation id: {partial_operation.operation_id}")
+                        f" operation id: {partial_operation.operation_id} and values: {data_exit}")
             return cursor.lastrowid
     except sqlite3.Error as e:
         logger.error(f"❌ DATABASE PARTIAL OP INSERTION FAILURE: {str(e)}")
