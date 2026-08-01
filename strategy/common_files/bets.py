@@ -295,15 +295,13 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             total_loss_pct = bet["actual_loss_percentage"] + this_leg_loss
             # 2. 10% Absolute Risk Circuit Breaker Check
             if total_loss_pct >= config["sl_percentage"]:
-                gain = -total_loss_pct
-                sl_profit = calculate_net_profit(gain=gain, capital=capital)
                 # execute secondary resolved pipeline
                 secondary_bet_resolution(
                     ticker=ticker,
                     exit_price=sl,
                     outcome="SL",
-                    gain=total_loss_pct,
-                    leg_gain=this_leg_loss,
+                    gain=-total_loss_pct,
+                    leg_gain=-this_leg_loss,
                     operation_id=operation_id,
                     capital=capital,
                 )
