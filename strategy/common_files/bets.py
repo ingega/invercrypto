@@ -248,7 +248,7 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             # gain is this leg profit minus the acummulated loss
             # example: this_leg_profit: 1%, accumulated profit: 2%, net=1%-2%=-1%
             # example: this_leg_profit: -1%, accumulated profit: 2%, net=-1%-2%=-3%
-            gain = bet["actual_loss_percentage"] - leg_profit
+            gain = leg_profit - bet["actual_loss_percentage"]
             # call the resolution pipeline
             # in this case, leg_gain is for partial operation, and gain for completed operation
             secondary_bet_resolution(
