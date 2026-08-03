@@ -78,11 +78,12 @@ async def main_engine_loop():
         # inform how many bets are active
         dir_bets = load_json_file(BET_FILE)
         sec_bets = load_json_file(SECONDARY_BET_FILE)
+        main_balance = load_json_file(MAIN_BALANCE)["main_balance"]
         direct_bets = len(dir_bets)
         secondary_bets = len(sec_bets)
         # secondary bet need to be loaded
         print(f"🔵 [SCAN COMPLETE] - after the scanner, there's " 
-                    f"{direct_bets} directs and {secondary_bets} secondary pending bets")
+                    f"{direct_bets} directs and {secondary_bets} secondary pending bets, main balance remains in: {main_balance}")
         # III: verify the secondary bets
         resolve_secondary_bets(secondary_bets=sec_bets, current_prices=actual_prices)
         # 4. scan for new opportunities
