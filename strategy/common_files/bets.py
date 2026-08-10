@@ -10,6 +10,8 @@ from common_files.paths import *
 from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation 
 from data_classes import UpdatePartialOperation
 from data_classes import SecondaryBet
+# live operations
+from data_classes import AddBetToJSON
 from database import save_partial_operation_to_db, update_completed_operations, update_partial_operations
 # balance operations
 from common_files.balances import calculate_net_profit, update_available_balance 
@@ -566,7 +568,56 @@ def reset_bets():
     save_json_file(SECONDARY_BET_FILE, {})
     logger.info(f"🧹 [BET] All bets was removed")
 
+
+#######################################################################
+#                          LIVE BETS                                  #                
+#######################################################################
+
+# JSON files
+class ActualLiveBets:
+    def __init__(self):
+        self.actual_bets_file = load_json_file(DIRECT_BETS_LIVE)
+
+    def add_bet(self, data: AddBetToJSON):
+        """
+        Method to add a record in direct bet json file
+        --------------------------------------------------
+        Params:
+            data(AddBetToJSON): JSON format dict with data to be added
+            e.g. {
+            "BTCUSDT": {
+                "operation_id": 12456 
+                }
+            }
+        """
+        bets_file = self.actual_bets_file.copy()
+        bets_file.update(data.as_dict())
+        save_json_file(DIRECT_BETS_LIVE, bets_file)
+
+    def remove_bet(self, ticker):
+        if not ticker:
+            raise DataError("Remove a ticker from actual_bets.json file, requires parameter ticker")
+        bets_file = self.actual_bets_file.copy()
+        bets_file.pop(ticker)
+        save_json_file(DIRECT_BETS_LIVE, bets_file)
+        logger.info(f"☑️ [LIVE][DIRECT BET FILE] ticker {ticker} was removed from actual bets file")
+
+# wrokflow
+
+def verify_live_direct_bet_result():
+    """
+    This function verify if any bet has been executed
+    workflow:
+    1. Open direct_bet_live_file
+    2. Iterate searching for 
+    """
+
+def verify_live_secondary_bet_result():
+    pass
+
+
 def main():
+    
     config = load_json_file(CONFIG_FILE)
     this_leg_loss = -config["flip_percentage"] - config["commission"]
     print(this_leg_loss)

@@ -3,7 +3,7 @@ import asyncio
 
 # local functions
 from common_files.bets import check_active_bets_resolution, resolve_secondary_bets, reset_bets
-from common_files.binance import get_actual_prices
+from common_files.binance_utils.bars import get_actual_prices
 from tangent.filter import scan_tangent_opportunities
 from utils.timing import wait_for_time_trigger
 # logger

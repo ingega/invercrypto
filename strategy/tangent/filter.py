@@ -1,5 +1,4 @@
 import time
-from binance.client import Client
 from datetime import datetime as dt
 from datetime import UTC
 from typing import Tuple
@@ -12,6 +11,8 @@ from common_files.balances import calculate_notional_size, calculate_colateral, 
 from data_classes import DirectBet, CompletedOperation, PartialOperation
 # database
 from database import save_operation_to_db, save_partial_operation_to_db
+# binance functions
+from common_files.binance_utils.bars import get_bars
 
 logger = get_logger(__name__)
 
@@ -105,15 +106,13 @@ def add_entry(ticker:str, side:str, entry_price: float):
     logger.info(f"↩️ record was added to actual bets file with this value"
                 f"{json_bet}")
 
-def scan_tangent_opportunities():
+def scan_tangent_opportunities(live=False):
     config = load_json_file(CONFIG_FILE)
     tickers = load_json_file(TICKERS_FILE)["selected_tickers"]
     separation = config["separation"]
     threshold = config["threshold"]
     interval = config["timeframe"]
     
-    # Unauthenticated client uses raw public REST responses
-    client = Client()
     found_opportunities = []
     
     print(f"🔎 [PURE SCAN] Scanning tickers: {tickers}")
@@ -121,18 +120,16 @@ def scan_tangent_opportunities():
     direct_bets = load_json_file(BET_FILE)
     secondary_bets = load_json_file(SECONDARY_BET_FILE)
     for ticker in tickers:
-        # avoid tickers in actual bet
-        if ticker in direct_bets:
-            continue
-        if ticker in secondary_bets:
-            continue
+        if not live:
+            # avoid tickers in actual bet
+            if ticker in direct_bets:
+                continue
+            if ticker in secondary_bets:
+                continue
         try:
             # Fetch raw kline information from Binance. Returns a list of lists.
             # limit parameter requests exactly what we need + a small safety buffer
-            klines = client.futures_klines(symbol=ticker, 
-                                       interval=interval, 
-                                       limit=separation)
-            
+            klines = get_bars(ticker=ticker, bars=separation, interval=interval)            
             # Extract out only the closing price (index 4 in Binance kline array format) 
             # and map it directly to floats
             epoch_ms = klines[-1][6] + 1 # last bar close time plus 1 ms
@@ -145,9 +142,15 @@ def scan_tangent_opportunities():
             if tangent_value >= threshold:
                 # add entry in BUY:
                 add_entry(ticker=ticker, side="BUY", entry_price=entry_price)
+                # add it to the return data
+                data = {"ticker": ticker, "tangent": tangent_value, "side": "BUY"}
+                found_opportunities.append(data)
             elif tangent_value <= -threshold:
                 # add entry in SELL
                 add_entry(ticker=ticker, side="SELL", entry_price=entry_price)
+                # add it to the return data
+                data = {"ticker": ticker, "tangent": tangent_value, "side": "SELL"}
+                found_opportunities.append(data)
                 
         except Exception as e:
             print(f"❌ Error sweeping live REST data for {ticker}: {e}")

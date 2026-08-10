@@ -2,14 +2,16 @@
 # alpha listed importations
 import sqlite3
 import traceback
+from typing import Tuple
 from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation, UpdatePartialOperation
+from data_classes import CompletedLiveOperation, PartialLiveOperation, UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
 from common_files.logger import get_logger
-from common_files.paths import DB_PATH
+from common_files.paths import DB_PATH, DB_LIVE_PATH
 
 logger = get_logger(__name__)
+logger_live = get_logger(__name__, log_live=True)
     
     
-
 def init_operations_db() -> None:
     """
     Initializes the SQLite database and creates the operations 
@@ -17,57 +19,17 @@ def init_operations_db() -> None:
     Includes a composite index to keep historical ML feature fetches 
     lightning-fast.
     """
-    # debug
-    logger.info(f"DB_PATH = {DB_PATH}")
-    logger.info(f"Parent = {DB_PATH.parent}")
-    logger.info(f"Exists = {DB_PATH.parent.exists()}")
+    # initialize live database
+    with sqlite3.connect(DB_LIVE_PATH) as conn:
+        cursor = conn.cursor()
+        # Enable Write-Ahead Logging for high-frequency concurrency updates
+        cursor.execute("PRAGMA journal_mode=WAL;")
+
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         # Enable Write-Ahead Logging for high-frequency concurrency updates
         cursor.execute("PRAGMA journal_mode=WAL;")
         
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS completed_operations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                operation_id INTEGER NOT NULL,
-                strategy TEXT NOT NULL,
-                ticker TEXT NOT NULL,
-                outcome TEXT NOT NULL,
-                gain REAL NOT NULL,
-                capital REAL NOT NULL,
-                profit REAL NOT NULL
-            );
-        """)
-        # Composite Index to radically accelerate future Machine Learning data fetching
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ticker_outcome 
-            ON completed_operations (ticker, outcome);
-        """)
-        conn.commit()
-
-        # second table
-        cursor.execute("""
-                CREATE TABLE IF NOT EXISTS partial_operations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    operation_id INTEGER NOT NULL,
-                    entry_date TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    entry_price REAL NOT NULL,
-                    tp REAL NOT NULL,
-                    sl REAL NOT NULL,
-                    exit_date TEXT NOT NULL,
-                    exit_price REAL NOT NULL,
-                    outcome TEXT NOT NULL,
-                    gain REAL NOT NULL,
-                    bet TEXT NOT NULL
-                );
-            """)
-        # Composite Index to radically accelerate future Machine Learning data fetching
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_entry_date_outcome 
-            ON partial_operations (entry_date, outcome);
-        """)
-        conn.commit()
 
 def save_operation_to_db(operation: CompletedOperation) -> int | None:
     """
@@ -301,6 +263,161 @@ def reset_partial_operations():
     except sqlite3.Error as e:
             logger.error(f"❌ [DB] DATABASE COMP INSERTION FAILURE: {str(e)}")
             traceback.print_exc()
+
+############################################################
+#                   LIVE DATABASE                          #             
+############################################################
+
+##################### SAVE FUNCTIONS  ######################
+
+def save_live_operation_to_db(live_operation: CompletedLiveOperation) -> int | None:
+    """
+    Safely records a resolved direct bet into the SQLite data layer.
+    """
+    query = """
+        INSERT INTO completed_operations (
+            operation_id, strategy, ticker, entry_date, capital, quantity, exit_date, 
+            outcome, gain, pnl, commission, fee, profit  
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """ 
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, live_operation.as_tuple())
+            conn.commit()
+            # prepare data for logger
+            data_exit = {
+                "operation_id": live_operation.operation_id,
+                "strategy": live_operation.strategy,
+                "ticker": live_operation.ticker,
+                "outcome": live_operation.outcome,
+                "gain": live_operation.gain,
+                "capital": live_operation.capital,
+                "profit": live_operation.profit
+            }
+            logger_live.info(f"🟢 [DB] record for {live_operation.ticker} added to completed_operations" 
+                        f" table with values: {data_exit} ")
+            return cursor.lastrowid
+    except sqlite3.Error as e:
+       logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
+
+def save_live_partial_operation_to_db(partial_live_operation: PartialLiveOperation) -> int | None:
+    """
+    Safely records a resolved partial bet into the SQLite data layer.
+    """
+    query = """
+        INSERT INTO completed_operations (
+            operation_id, order_id, entry_date, side, entry_price, type, tp, sl, exit_date, exit_ptice,
+            outcome, gain, pnl, commission, bet
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """ 
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, partial_live_operation.as_tuple())
+            conn.commit()
+            # prepare data for logger
+            data_exit = {
+                "operation_id": partial_live_operation.operation_id,
+                "order_id": partial_live_operation.order_id,
+                "side": partial_live_operation.side,
+                "outcome": partial_live_operation.outcome,
+                "gain": partial_live_operation.gain
+            }
+            logger_live.info(f"🟢 [DB] record for {partial_live_operation.operation_id} added to partial_operations" 
+                        f" table with values: {data_exit} ")
+            return cursor.lastrowid
+    except sqlite3.Error as e:
+       logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
+
+##################### UPDATE FUNCTIONS  ######################
+
+def update_live_complete_operation(
+    update_record: UpdateCompletedOperation,
+) -> bool:
+    """
+    Updates a completed operation with exit information.
+    """
+
+    query = """
+        UPDATE completed_operations
+        SET
+            exit_date = ?,
+            outcome = ?,
+            gain = ?,
+            pnl = ?,
+            commission = ?,
+            fee = ?,
+            profit = ?
+        WHERE operation_id = ?;
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                query,
+                update_record.as_tuple(),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE UPDATE FAILURE: {e}"
+        )
+        return False
+
+
+##################### QUERY FUNCTIONS  #####################
+
+def query_tickets_in_bet():
+    """
+    Verify if a ticker is in a bet
+    """
+    query = """ 
+    SELECT ticker FROM completed_operations 
+    WHERE outcome = 'UNRESOLVED';
+    """
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            # return all tickers in bet
+            return cursor.fetchall()
+            
+    except sqlite3.Error as e:
+           logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}") 
+
+def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
+    """
+    Retrieve order_id from partial_operations
+    for an unresolved completed operation.
+    """
+    query = """
+        SELECT partial_operations.order_id, partial_operations.operation_id
+        FROM partial_operations
+        INNER JOIN completed_operations
+            ON partial_operations.operation_id =
+               completed_operations.operation_id
+        WHERE completed_operations.ticker = ?
+          AND completed_operations.outcome = 'UNRESOLVED';
+    """
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (ticker,))
+            row = cursor.fetchone()
+            if row is None:
+                return None, None
+            return row[0]
+
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
+        )
+        return None
+ 
 
 def main():
     from data_classes import UpdatePartialOperation

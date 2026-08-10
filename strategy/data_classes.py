@@ -149,18 +149,143 @@ class UpdatePartialOperation:
             self.partial_id
         )
 
+##################################################
+#            Live DataClasses                    #
+##################################################
+
+###############  DATABASE DATACLASSES  ################
+@dataclass
+class CompletedLiveOperation:
+    operation_id: int
+    strategy: str
+    ticker: str
+    entry_date: str
+    capital: float
+    quantity: float
+    exit_date: str
+    outcome: str
+    gain: float
+    pnl: float
+    commission: float
+    fee: float
+    profit: float
+
+    def as_tuple(self) -> Tuple:
+        return(
+        self.operation_id,
+        self.strategy,
+        self.ticker,
+        self.entry_date,
+        self.capital,
+        self.quantity,
+        self.exit_date,
+        self.outcome,
+        self.gain,
+        self.pnl,
+        self.commission,
+        self.fee,
+        self.profit
+        )
+
+class PartialLiveOperation:
+    operation_id: int
+    order_id: int
+    entry_date: str
+    side: str
+    entry_price: float
+    type: str
+    tp: float
+    sl: float
+    exit_date: str
+    exit_price: float
+    outcome: str
+    gain: float
+    pnl: float
+    commission: float
+    bet: str
+
+    def as_tuple(self) -> Tuple:
+        return(
+            self.operation_id,
+            self.order_id,
+            self.entry_date,
+            self.side,
+            self.entry_price,
+            self.type,
+            self.tp,
+            self.sl,
+            self.exit_date,
+            self.exit_price,
+            self.outcome,
+            self.gain,
+            self.pnl,
+            self.commission,
+            self.bet
+        )
+
+class UpdateCompleteLiveOperation:
+    exit_date: str
+    outcome: str
+    gain: float
+    pnl: float
+    commission: float
+    fee: float
+    profit: float
+    operation_id: int
+
+    def as_tuple(self) -> Tuple:
+        return(
+            self.exit_date,
+            self.outcome,
+            self.gain,
+            self.pnl,
+            self.commission,
+            self.fee,
+            self.profit,
+            self.operation_id
+        )
+
+class UpdatePartialLiveOPeration:
+    exit_date: str
+    exit_price: float
+    outcome: str
+    gain: float
+    pnl: float
+    commission: float
+
+    def as_tuple(self) -> Tuple:
+        return(
+            self.exit_date,
+            self.exit_price,
+            self.outcome,
+            self.gain,
+            self.pnl,
+            self.commission
+        )
+
+###############  JSON DATACLASSES  ################
+
+@dataclass
+class AddBetToJSON:
+    ticker: str
+    operation_id: int
+
+    def as_dict(self) -> dict:
+        """
+        Returnig a JSON object allows data growth easily
+        """
+        return(
+            {
+                self.ticker: {
+                    "operation_id": self.operation_id
+                }
+            }
+        )
+
 
 def main():
-    payload = DirectBet(
-        operation_id=1,
-        ticker="BTCUSDT",
-        capital=100,
-        colateral=50,
-        entry_date="2026-07-25 00:00:00",
-        side="BUY",
-        entry_price=64000
-    )
-    print(payload.as_json())
+    payload = ()
+    print(payload)
 
 if __name__ == '__main__':
     main()

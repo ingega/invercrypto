@@ -20,7 +20,7 @@ import os
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from common_files.paths import LOG_FILE
+from common_files.paths import LOG_FILE, LOG_LIVE_FILE
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -119,7 +119,8 @@ JSON_FORMATTER = JsonFormatter()
 # Logger
 # -----------------------------------------------------------------------------
 
-def get_logger(name: str = "Invercrypto") -> logging.Logger:
+def get_logger(name: str = "Invercrypto",
+               log_live: bool = False) -> logging.Logger:
 
     logger = logging.getLogger(name)
 
@@ -146,11 +147,15 @@ def get_logger(name: str = "Invercrypto") -> logging.Logger:
     # -------------------------------------------------------------------------
     # Rotating File
     # -------------------------------------------------------------------------
+    if log_live:
+        log_file = LOG_LIVE_FILE
+    else:
+        log_file = LOG_FILE
 
     if ENABLE_FILE_LOG:
 
         file_handler = RotatingFileHandler(
-            LOG_FILE,
+            log_file,
             maxBytes=MAX_LOG_SIZE,
             backupCount=BACKUP_COUNT,
             encoding="utf-8",

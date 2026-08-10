@@ -36,10 +36,38 @@ TICKERS_BALANCES = STATE_DIR / "tickers_balances.json"
 MAIN_BALANCE = STATE_DIR / "main_balance.json"
 AVAILABLE_BALANCE = STATE_DIR / "available_balance.json"
 # logs
+# adding more strategies, naming must be like TANGENT_LOG_FILE etc.
 LOG_FILE = LOG_DIR / "engine.log"
+LOG_LIVE_FILE = LOG_DIR / "engine_live.log"
 
 # database path
 DB_PATH = DATA_PATH / "operations.db"
+
+######################################################
+#      Real strategy files (live folder)             #
+######################################################
+
+# database
+DB_LIVE_PATH = DATA_PATH / "operations_live.db"
+
+# config
+CONFIG_DIR_LIVE = DATA_PATH / "config" / "live"
+CONFIG_DIR_LIVE.mkdir(parents=True, exist_ok=True)
+
+CONFIG_LIVE_FILE = CONFIG_DIR_LIVE / "config.json"
+
+# balances
+MAIN_LIVE_STATE_FOLDER = DATA_PATH / "state" / "live"
+MAIN_LIVE_STATE_FOLDER.mkdir(parents=True, exist_ok=True)
+
+MAIN_BALANCE_LIVE = MAIN_LIVE_STATE_FOLDER / "main_balance.json"
+AVAILABLE_BALANCE_LIVE = MAIN_LIVE_STATE_FOLDER / "available_balance.json"
+TICKERS_BALANCES_LIVE = MAIN_LIVE_STATE_FOLDER / "tickers_balances.json"
+
+# bets
+DIRECT_BETS_LIVE = MAIN_LIVE_STATE_FOLDER / "direct_bets.json"
+SECONDARY_BETS_LIVE = MAIN_LIVE_STATE_FOLDER / "secondary_bets.json"
+
 
 # I/O files functions
 def load_json_file(filepath, default_factory=dict):
