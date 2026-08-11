@@ -416,7 +416,27 @@ async def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
         )
         return None, None
- 
+
+async def query_capital(operation_id: int) -> float:
+    query = """
+    SELECT capital
+    FROM completed_operations
+    WHERE operation_id = ?
+    """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return 0.0
+            return row[0]
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
+        )
+        return 0.0
+
 
 def main():
     from data_classes import UpdatePartialOperation

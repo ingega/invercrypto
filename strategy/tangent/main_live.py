@@ -2,13 +2,13 @@
 import asyncio
 import os
 import time
-from binance import AsyncClient, BinanceSocketManager, Client
+from binance import AsyncClient, BinanceSocketManager
 from typing import List
-from database import query_tickets_in_bet, save_live_operation_to_db, query_order_id
+from database import query_tickets_in_bet, save_live_operation_to_db, query_order_id, query_capital
 from data_classes import CompletedLiveOperation, UpdateCompletedOperation
+from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders, SymbolRulesManager, GetOrders
 from common_files.logger import get_logger
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
-from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders, SymbolRulesManager
 from tangent.filter import scan_tangent_opportunities
 from utils.timing import wait_for_time_trigger
 
@@ -23,7 +23,6 @@ async def calculate_capital(entry_price: float, qty: float) -> float:
     return entry_price * qty / leverage
 
 async def make_entry_pipeline(client, rules_mgr, symbol, side):
-    print("=" * 10, "Start make entry pipeline ... ", "=" * 10)
     result = await direct_bet_execute(symbol=symbol, 
                                       side=side, 
                                       client=client,
@@ -65,17 +64,14 @@ async def make_entry_pipeline(client, rules_mgr, symbol, side):
         # inform
         logger.info(f"🟢 [DB] record added to the database successfully")
         return {"status": "SUCCESS", "message": "record added to the database"}
-    print("=" * 10, "End make entry pipeline ... ", "=" * 10)
     return {"status": "FAIL", "message": "failure in direct_bet_execute pipeline"}
 
 async def scan_for_opportunities() -> List[str | None]:
     final_list = []
     oppor = await scan_tangent_opportunities(live=True)
-    print("oppor content:", oppor)
     if len(oppor) > 0: # verify that there's no actual bet on that ticker
         # retrieve the tickers in an actual bet
         tickers = await query_tickets_in_bet()
-        print("content of tickers: ", tickers)
         active_symbols = {ticker[0] for ticker in tickers}
         for op in oppor:
             ticker = op['ticker']
@@ -92,7 +88,6 @@ async def entries_pipeline(client, rules_mgr):
     2. Save record in database
     3. Inform
     """
-    print("=" * 10, "start entries pipeline....", "=" * 10)
     # 1. Scan opportunities
     oppor = await scan_for_opportunities()
     if oppor:
@@ -104,13 +99,11 @@ async def entries_pipeline(client, rules_mgr):
             print(f"error retrieving oppor, content: {oppor}, error: {e}")
     else:
         print("no opportunities found")
-    print("=" * 10, "end entries pipeline....", "=" * 10)
 
 async def verify_bet_result(msg, client):
     """
     Event-driven callback triggered in real time when Binance fills an order.
     """
-    print("=" * 10, "start verify bet result....", "=" * 10)
     event_data = msg.get('o', {})
     symbol = event_data.get('s')
     order_status = event_data.get('X')  # FILLED, CANCELED, EXPIRED
@@ -118,17 +111,32 @@ async def verify_bet_result(msg, client):
 
     if order_status == 'FILLED':
         logger.info(f"⚡ [EVENT TRIGGERED] {symbol} Order {order_type} FILLED!")
-
+        # get common data
+        leverage = load_json_file(CONFIG_LIVE_FILE)["leverage"]
         if order_type == 'STOP_MARKET':  # SL triggered
             # A. Retrieve the order_id from DB
             order_id, operation_id = await query_order_id(ticker=symbol)
-
             if order_id:
-                # B. Update Database
+                # B. Update Database, profit is the realized pnl, commission must be incluied as well, gain can 
+                # be calculated with the original capital and leverage
+                # gain = ((pnl - commission) / leverage) / capital
+                # e.g pnl = 10 USDT, commission = 0.5 usdt, leverage = 10, capital = 100
+                # gain = ((10 - 0.5) / 10) / 100 = 0.0095 -> 0.95% Buying in 100 and selling in 101 (1% TP) I get 0.95% gain
+                capital = await query_capital(operation_id=operation_id)
+                # get pnl and commission
+                order_data = await GetOrders(client=client).get_order_execution(symbol=symbol, order_id=order_id)
+                pnl = order_data["realized_pnl"]
+                commission = order_data["commission"]
+                # get capital
+                
+                gain = 0
+                if capital > 0:
+                    gain = ((pnl - commission) / leverage) / capital
+                profit = pnl - commission
                 update_record = UpdateCompletedOperation(
                     outcome="SL",
-                    gain=-0.0057,
-                    profit=1,
+                    gain=gain,
+                    profit=profit,
                     operation_id=operation_id
                 )
                 logger.info(f"🟥 [ORDER UPDATE] SL order {order_id} executed and updated")
@@ -136,33 +144,40 @@ async def verify_bet_result(msg, client):
                 # C. Use `client` to cancel lingering Take Profit orphan order!
                 await client.futures_cancel_all_open_orders(symbol=symbol)
                 logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
-
             else:
                 logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
-        elif order_type == 'TAKE_PROFIT':  # TP triggered
-                    # A. Retrieve the order_id from DB
-                    order_id, operation_id = await query_order_id(ticker=symbol)
-                    if order_id:
-                        # B. Update Database
-                        update_record = UpdateCompletedOperation(
-                            outcome="TP",
-                            gain=-0.0057,
-                            profit=1,
-                            operation_id=operation_id
-                        )
-                        logger.info(f"🟥 [ORDER UPDATE] SL order {order_id} executed and updated")
-        
-                        # C. Use `client` to cancel lingering Take Profit orphan order!
-                        await client.futures_cancel_all_open_orders(symbol=symbol)
-                        logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
-        
-                    else:
-                        logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
-
-    print("=" * 10, "... ends verify bet result", "=" * 10)
+        elif order_type == 'TAKE_PROFIT':  # SL triggered
+            # A. Retrieve the order_id from DB
+            order_id, operation_id = await query_order_id(ticker=symbol)
+            if order_id:
+                # B. Update Database, profit is the realized pnl, commission must be incluied as well, gain can 
+                # be calculated with the original capital and leverage
+                # gain = ((pnl - commission) / leverage) / capital
+                # e.g pnl = 10 USDT, commission = 0.5 usdt, leverage = 10, capital = 100
+                # gain = ((10 - 0.5) / 10) / 100 = 0.0095 -> 0.95% Buying in 100 and selling in 101 (1% TP) I get 0.95% gain
+                capital = await query_capital(operation_id=operation_id)
+                # get pnl and commission
+                order_data = await GetOrders(client=client).get_order_execution(symbol=symbol, order_id=order_id)
+                pnl = order_data["realized_pnl"]
+                commission = order_data["commission"]
+                gain = 0
+                if capital > 0:
+                    gain = ((pnl - commission) / leverage) / capital
+                profit = pnl - commission
+                update_record = UpdateCompletedOperation(
+                    outcome="TP",
+                    gain=gain,
+                    profit=profit,
+                    operation_id=operation_id
+                )
+                logger.info(f"🟩 [ORDER UPDATE] TP order {order_id} executed and updated")
+                # C. Use `client` to cancel lingering Take Profit orphan order!
+                await client.futures_cancel_all_open_orders(symbol=symbol)
+                logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
+            else:
+                logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
 
 async def start_user_stream(client):
-    print("=" * 10, "start user stream....", "=" * 10)
     bsm = BinanceSocketManager(client)
     user_socket = bsm.futures_user_socket()
     try:
@@ -181,7 +196,7 @@ async def start_user_stream(client):
         logger.exception("User stream failed.")
         raise
     finally:
-        print("=" * 10, "end user stream....", "=" * 10)
+        print("Binance Futures user stream closed")
 
 async def main():
     config = load_json_file(CONFIG_LIVE_FILE)

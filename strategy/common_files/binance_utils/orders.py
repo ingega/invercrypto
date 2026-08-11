@@ -178,10 +178,6 @@ class SymbolRulesManager:
                     "pricePrecision": symbol_info["pricePrecision"],
                 }
 
-            logger.info(
-                "Successfully cached exchange rules for all symbols."
-            )
-
         except Exception as e:
             logger.exception(
                 "Failed to fetch exchange info: %s",
