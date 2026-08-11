@@ -8,7 +8,7 @@ from database import query_tickets_in_bet, save_live_operation_to_db, query_orde
 from data_classes import CompletedLiveOperation, UpdateCompletedOperation
 from common_files.logger import get_logger
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
-from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders
+from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders, SymbolRulesManager
 from tangent.filter import scan_tangent_opportunities
 from utils.timing import wait_for_time_trigger
 
@@ -17,20 +17,23 @@ from utils.timing import wait_for_time_trigger
 # init logger
 logger = get_logger(__name__, log_live=True)
 
-
 async def calculate_capital(entry_price: float, qty: float) -> float:
     # capital is calculated with formula entry_price * quantity / leverage
     leverage = load_json_file(CONFIG_LIVE_FILE).get("leverage", 1)
     return entry_price * qty / leverage
 
-async def make_entry_pipeline(symbol, side):
+async def make_entry_pipeline(client, rules_mgr, symbol, side):
     print("=" * 10, "Start make entry pipeline ... ", "=" * 10)
-    result = direct_bet_execute(symbol, side)
+    result = await direct_bet_execute(symbol=symbol, 
+                                      side=side, 
+                                      client=client,
+                                      rules_mgr=rules_mgr
+                                      )
     data = result['data']
     if result.get("status") == "SUCCESS":
         order_id = data.get("orderId", {})
         # after sending the order, check if it was filled and log the result
-        synchronized_orders = synchronize_orders(symbol, order_id)
+        synchronized_orders = await synchronize_orders(symbol=symbol, order_id=order_id, client=client)
         # update orders
         if len(synchronized_orders) > 0:
             data.update(synchronized_orders)
@@ -58,7 +61,7 @@ async def make_entry_pipeline(symbol, side):
             fee=0,
             profit=0
         )
-        save_live_operation_to_db(live_operation=completed_record)
+        await save_live_operation_to_db(live_operation=completed_record)
         # inform
         logger.info(f"🟢 [DB] record added to the database successfully")
         return {"status": "SUCCESS", "message": "record added to the database"}
@@ -74,14 +77,15 @@ async def scan_for_opportunities() -> List[str | None]:
         tickers = await query_tickets_in_bet()
         print("content of tickers: ", tickers)
         active_symbols = {ticker[0] for ticker in tickers}
-        final_list = [
-                symbol
-                for symbol in oppor
-                if symbol not in active_symbols
-                ]
+        for op in oppor:
+            ticker = op['ticker']
+            side = op['side']
+            if ticker not in active_symbols:
+                data = {"ticker": ticker, "side": side}
+                final_list.append(data)
     return final_list
 
-async def entries_pipeline():
+async def entries_pipeline(client, rules_mgr):
     """
     This pipeline scans for oppor, and if any ticker creates an opportunity, next pipeline is executed:
     1. Make the entry
@@ -91,12 +95,11 @@ async def entries_pipeline():
     print("=" * 10, "start entries pipeline....", "=" * 10)
     # 1. Scan opportunities
     oppor = await scan_for_opportunities()
-    # oppor contains ticker and side
     if oppor:
         try:
             for op in oppor:
                 ticker, side = op["ticker"], op["side"]
-                await make_entry_pipeline(symbol=ticker, side=side)
+                await make_entry_pipeline(symbol=ticker, side=side, client=client, rules_mgr=rules_mgr)
         except Exception as e:
             print(f"error retrieving oppor, content: {oppor}, error: {e}")
     else:
@@ -118,13 +121,13 @@ async def verify_bet_result(msg, client):
 
         if order_type == 'STOP_MARKET':  # SL triggered
             # A. Retrieve the order_id from DB
-            order_id, operation_id = query_order_id(ticker=symbol)
+            order_id, operation_id = await query_order_id(ticker=symbol)
 
             if order_id:
                 # B. Update Database
                 update_record = UpdateCompletedOperation(
                     outcome="SL",
-                    gain=-0.005,
+                    gain=-0.0057,
                     profit=1,
                     operation_id=operation_id
                 )
@@ -136,6 +139,25 @@ async def verify_bet_result(msg, client):
 
             else:
                 logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
+        elif order_type == 'TAKE_PROFIT':  # TP triggered
+                    # A. Retrieve the order_id from DB
+                    order_id, operation_id = await query_order_id(ticker=symbol)
+                    if order_id:
+                        # B. Update Database
+                        update_record = UpdateCompletedOperation(
+                            outcome="TP",
+                            gain=-0.0057,
+                            profit=1,
+                            operation_id=operation_id
+                        )
+                        logger.info(f"🟥 [ORDER UPDATE] SL order {order_id} executed and updated")
+        
+                        # C. Use `client` to cancel lingering Take Profit orphan order!
+                        await client.futures_cancel_all_open_orders(symbol=symbol)
+                        logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
+        
+                    else:
+                        logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
 
     print("=" * 10, "... ends verify bet result", "=" * 10)
 
@@ -184,7 +206,9 @@ async def main():
                 target_second=target_second,
             )
             # 2. Scan for new opportunities
-            await entries_pipeline()
+            # create the rules manager
+            rules_mgr = await SymbolRulesManager.create(client=client)
+            await entries_pipeline(client=client, rules_mgr=rules_mgr)
     finally:
         user_stream_task.cancel()
         try:

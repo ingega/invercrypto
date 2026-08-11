@@ -269,7 +269,7 @@ def reset_partial_operations():
 
 ##################### SAVE FUNCTIONS  ######################
 
-def save_live_operation_to_db(live_operation: CompletedLiveOperation) -> int | None:
+async def save_live_operation_to_db(live_operation: CompletedLiveOperation) -> int | None:
     """
     Safely records a resolved direct bet into the SQLite data layer.
     """

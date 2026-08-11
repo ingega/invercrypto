@@ -2,6 +2,7 @@
 """
 This module contains classes and functions to manage orders in binance futures
 """
+import asyncio
 import json
 import os
 import math
@@ -17,11 +18,6 @@ from common_files.paths import MAIN_BALANCE_LIVE, CONFIG_LIVE_FILE, SECONDARY_BE
 
 logger = get_logger(__name__, log_live=True)
 
-client = AsyncClient(
-    api_key=os.getenv("BINANCE_API_KEY"),
-    api_secret=os.getenv("BINANCE_API_SECRET")
-)
-
 
 
 # ====================================================#
@@ -36,12 +32,13 @@ class NotonialSize:
         - _init_: Initializes the NotonialSize class and opens necessary files.
         - open_files: Opens the necessary files for reading/writing.
     """
-    def __init__(self, symbol):
+    def __init__(self, symbol, client):
         self.main_balance = None
         self.config = {}
         self.secondary_bets = {}
         self.tickers_balances = {}
         self.symbol = symbol
+        self.client = client
 
         self.open_files()
 
@@ -62,7 +59,7 @@ class NotonialSize:
             logger.error(f"Error opening files: {e}")
             raise
 
-    def get_notional_size(self) -> float:
+    async def get_notional_size(self) -> float:
         """
         Calculates the notional size for a given symbol based on the main balance and configuration.
         1. Retrieves the main balance from the main_balance.json file.
@@ -75,6 +72,7 @@ class NotonialSize:
         :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
         :return: The calculated notional size.
         """
+        print(f"{'=' * 10} start get_notional_size...{'=' * 10}")
         try:
             main_balance = self.main_balance
             size_percentage = self.config.get("size_percentage", 0.07)  # Default to 1% if not set
@@ -83,12 +81,13 @@ class NotonialSize:
             print(f"Calculating notional size for {self.symbol}: main_balance={main_balance}, "
                   f"size_percentage={size_percentage}, leverage={leverage}, ticker_balance={ticker_balance}")
             notional_size = main_balance * size_percentage * leverage * ticker_balance
+            print(f"notional size is: {notional_size}")
             return notional_size
         except Exception as e:
             logger.error(f"Error calculating notional size for {self.symbol}: {e}")
             return 0.0
 
-    def get_quantity_from_notional(self) -> float:
+    async def get_quantity_from_notional(self) -> float:
         """
         Calculates the quantity to trade based on the notional size and current price of the symbol.
         1. Fetches the current price of the symbol from Binance Futures.
@@ -99,15 +98,19 @@ class NotonialSize:
         :param notional_size: The notional size for the trade.
         :return: The calculated quantity to trade.
         """
+        print(f"{'=' * 10} start get quantity from notional... {'=' * 10}")
         try:
             # get notional size
-            notional_size = self.get_notional_size()
-            ticker = client.futures_symbol_ticker(symbol=self.symbol)
+            notional_size = await self.get_notional_size()
+            print(f"inside of get qty the notional size is {notional_size}")
+            ticker = await self.client.futures_symbol_ticker(symbol=self.symbol)
+            print(f"the value of ticker is {ticker}")
             current_price = float(ticker['price'])
             quantity = notional_size / current_price
+            print(f"values; notional: {notional_size}, current price: {current_price}, qty: {quantity}")
             return quantity
         except Exception as e:
-            logger.error(f"Error calculating quantity from notional for {self.symbol}: {e}")
+            logger.exception(f"Error calculating quantity from notional for {self.symbol}: {e}")
             return 0.0
 
 
@@ -190,7 +193,26 @@ class SymbolRulesManager:
         rules = self.rules_cache.get(symbol)
 
         if not rules:
-            return quantity
+            logger.error(
+            "Exchange rules NOT FOUND for symbol=%s. "
+            "Available cached symbols=%d",
+            symbol,
+            len(self.rules_cache),
+            )
+            raise ValueError(
+                f"No exchange rules available for {symbol}"
+            )
+
+        logger.info(
+            "Quantity rules: symbol=%s | "
+            "input=%s | step_size=%s | min_qty=%s | "
+            "quantity_precision=%s",
+            symbol,
+            quantity,
+            rules["step_size"],
+            rules["min_qty"],
+            rules["quantityPrecision"],
+        )
 
         step_size = rules["step_size"]
         precision = rules["quantityPrecision"]
@@ -232,34 +254,377 @@ class SymbolRulesManager:
 # ====================================================#
 #      GetOrders: query all orders and positions      #
 # ====================================================#
+
 class GetOrders:
+    """
+    Provides access to Binance Futures orders, positions,
+    and trade executions.
+    """
+
     def __init__(self, client):
         self.client = client
 
-    async def get_all_orders(self, symbol):
+    # -------------------------------------------------------------------------
+    # ORDERS
+    # -------------------------------------------------------------------------
+
+    async def get_all_orders(self, symbol: str) -> list[dict]:
         """
-        Get all orders for a given symbol.
-        :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
-        :return: A list of all orders for the specified symbol.
+        Retrieves all orders for a given symbol.
+
+        Args:
+            symbol: Binance Futures symbol, e.g. 'BTCUSDT'.
+
+        Returns:
+            List of Binance order dictionaries.
+            Empty list if the request fails.
         """
         try:
-            orders = await self.client.futures_get_all_orders(symbol=symbol)
+            logger.debug(
+                "Retrieving all Futures orders: symbol=%s",
+                symbol,
+            )
+
+            orders = await self.client.futures_get_all_orders(
+                symbol=symbol,
+            )
+
+            logger.debug(
+                "Orders retrieved: symbol=%s, count=%d",
+                symbol,
+                len(orders),
+            )
+
             return orders
-        except Exception as e:
-            logger.error(f"Error fetching orders for {symbol}: {e}")
+
+        except Exception:
+            logger.exception(
+                "Failed to retrieve all Futures orders: "
+                "symbol=%s",
+                symbol,
+            )
             return []
 
-    async def get_all_positions(self):
+    async def get_order(
+        self,
+        symbol: str,
+        order_id: int,
+    ) -> dict | None:
         """
-        Get all positions for the account.
-        :return: A list of all positions.
+        Retrieves a specific Binance Futures order.
+
+        Args:
+            symbol: Binance Futures symbol.
+            order_id: Binance order ID.
+
+        Returns:
+            Complete Binance order dictionary,
+            or None if the order cannot be retrieved.
         """
         try:
-            positions = await self.client.futures_account_trades(limit=10)  # Adjust limit as needed
+            logger.debug(
+                "Retrieving Futures order: "
+                "symbol=%s, order_id=%s",
+                symbol,
+                order_id,
+            )
+
+            order = await self.client.futures_get_order(
+                symbol=symbol,
+                orderId=order_id,
+            )
+
+            logger.debug(
+                "Futures order retrieved: "
+                "symbol=%s, order_id=%s, "
+                "status=%s, type=%s, side=%s, "
+                "executedQty=%s, avgPrice=%s",
+                symbol,
+                order_id,
+                order.get("status"),
+                order.get("type"),
+                order.get("side"),
+                order.get("executedQty"),
+                order.get("avgPrice"),
+            )
+
+            return order
+
+        except Exception:
+            logger.exception(
+                "Failed to retrieve Futures order: "
+                "symbol=%s, order_id=%s",
+                symbol,
+                order_id,
+            )
+            return None
+
+    # -------------------------------------------------------------------------
+    # POSITIONS
+    # -------------------------------------------------------------------------
+
+    async def get_all_positions(self) -> list[dict]:
+        """
+        Retrieves all Futures positions for the account.
+
+        Returns:
+            List of position dictionaries.
+            Empty list if the request fails.
+        """
+        try:
+            logger.debug(
+                "Retrieving all Futures positions."
+            )
+
+            positions = await self.client.futures_position_information()
+
+            logger.debug(
+                "Positions retrieved: count=%d",
+                len(positions),
+            )
+
             return positions
-        except Exception as e:
-            logger.error(f"Error fetching positions: {e}")
+
+        except Exception:
+            logger.exception(
+                "Failed to retrieve Futures positions."
+            )
             return []
+
+    # -------------------------------------------------------------------------
+    # TRADES / EXECUTIONS
+    # -------------------------------------------------------------------------
+
+    async def get_trades(
+        self,
+        symbol: str,
+        order_id: int,
+    ) -> list[dict]:
+        """
+        Retrieves all Futures trade executions associated
+        with a specific order.
+
+        One Binance order can generate multiple trade
+        executions/fills.
+
+        Args:
+            symbol: Binance Futures symbol.
+            order_id: Binance order ID.
+
+        Returns:
+            List of Binance trade dictionaries.
+            Empty list if no trades are found or the request fails.
+        """
+        try:
+            logger.debug(
+                "Retrieving Futures trades: "
+                "symbol=%s, order_id=%s",
+                symbol,
+                order_id,
+            )
+
+            trades = await self.client.futures_account_trades(
+                symbol=symbol,
+                orderId=order_id,
+            )
+
+            logger.debug(
+                "Trades retrieved: "
+                "symbol=%s, order_id=%s, trade_count=%d",
+                symbol,
+                order_id,
+                len(trades),
+            )
+
+            return trades
+
+        except Exception:
+            logger.exception(
+                "Failed retrieving Futures trades: "
+                "symbol=%s, order_id=%s",
+                symbol,
+                order_id,
+            )
+            return []
+
+    # -------------------------------------------------------------------------
+    # COMPLETE ORDER EXECUTION
+    # -------------------------------------------------------------------------
+
+    async def get_order_execution(
+        self,
+        symbol: str,
+        order_id: int,
+    ) -> dict | None:
+        """
+        Retrieves and combines order-level and execution-level
+        information for a specific Futures order.
+
+        The order endpoint provides information such as:
+            - status
+            - type
+            - side
+            - original quantity
+            - executed quantity
+            - average price
+
+        The trade endpoint provides:
+            - individual executions
+            - realized PnL
+            - commission
+            - commission asset
+
+        Multiple trade executions are aggregated into a single
+        result.
+
+        Args:
+            symbol: Binance Futures symbol.
+            order_id: Binance order ID.
+
+        Returns:
+            Combined order/execution dictionary,
+            or None if the order cannot be retrieved.
+        """
+
+        order = await self.get_order(
+            symbol=symbol,
+            order_id=order_id,
+        )
+
+        if order is None:
+            logger.error(
+                "Cannot build order execution: "
+                "order not found. symbol=%s, order_id=%s",
+                symbol,
+                order_id,
+            )
+            return None
+
+        trades = await self.get_trades(
+            symbol=symbol,
+            order_id=order_id,
+        )
+
+        # ---------------------------------------------------------------------
+        # No executions yet
+        # ---------------------------------------------------------------------
+
+        if not trades:
+            logger.warning(
+                "Order has no trade executions: "
+                "symbol=%s, order_id=%s, status=%s",
+                symbol,
+                order_id,
+                order.get("status"),
+            )
+
+            return {
+                **order,
+                "trade_count": 0,
+                "executed_qty": Decimal("0"),
+                "average_trade_price": Decimal("0"),
+                "realized_pnl": Decimal("0"),
+                "commission": Decimal("0"),
+                "commission_asset": None,
+                "trades": [],
+            }
+
+        # ---------------------------------------------------------------------
+        # Aggregate executions
+        # ---------------------------------------------------------------------
+
+        executed_qty = sum(
+            (
+                Decimal(trade["qty"])
+                for trade in trades
+            ),
+            Decimal("0"),
+        )
+
+        realized_pnl = sum(
+            (
+                Decimal(trade["realizedPnl"])
+                for trade in trades
+            ),
+            Decimal("0"),
+        )
+
+        commission = sum(
+            (
+                Decimal(trade["commission"])
+                for trade in trades
+            ),
+            Decimal("0"),
+        )
+
+        # Binance should normally use the same commission asset
+        # for all executions of the order.
+        commission_assets = {
+            trade.get("commissionAsset")
+            for trade in trades
+        }
+
+        if len(commission_assets) == 1:
+            commission_asset = commission_assets.pop()
+        else:
+            logger.warning(
+                "Multiple commission assets found: "
+                "symbol=%s, order_id=%s, assets=%s",
+                symbol,
+                order_id,
+                commission_assets,
+            )
+            commission_asset = None
+
+        # ---------------------------------------------------------------------
+        # Weighted average execution price
+        # ---------------------------------------------------------------------
+
+        total_quote = sum(
+            (
+                Decimal(trade["price"])
+                * Decimal(trade["qty"])
+                for trade in trades
+            ),
+            Decimal("0"),
+        )
+
+        average_trade_price = (
+            total_quote / executed_qty
+            if executed_qty > 0
+            else Decimal("0")
+        )
+
+        logger.debug(
+            "Order execution aggregated: "
+            "symbol=%s, order_id=%s, "
+            "trades=%d, qty=%s, avg_price=%s, "
+            "realized_pnl=%s, commission=%s",
+            symbol,
+            order_id,
+            len(trades),
+            executed_qty,
+            average_trade_price,
+            realized_pnl,
+            commission,
+        )
+
+        return {
+            **order,
+
+            # Execution information
+            "trade_count": len(trades),
+            "executed_qty": executed_qty,
+            "average_trade_price": average_trade_price,
+
+            # Financial information
+            "realized_pnl": realized_pnl,
+            "commission": commission,
+            "commission_asset": commission_asset,
+
+            # Raw executions
+            "trades": trades,
+        }
 
 # ====================================================#
 #              Orders: creates orders                 #
@@ -296,6 +661,8 @@ class CreateOrderManager:
         formatted_qty = self.rules_manager.format_quantity(symbol, quantity)
         formatted_sl = self.rules_manager.format_price(symbol, stop_loss_price)
         formatted_tp = self.rules_manager.format_price(symbol, take_profit_price)
+
+        print(f"value of params; formatted_qty: {formatted_qty}, formated_sl: {formatted_sl}, formated tp: {formatted_tp}")
         
         # Determine opposite side for exit orders
         exit_side = 'SELL' if side == 'BUY' else 'BUY'
@@ -330,7 +697,7 @@ class CreateOrderManager:
         
         try:
             # 3. Place Stop Loss Bracket
-            sl_order = self.client.futures_create_order(
+            sl_order = await self.client.futures_create_order(
                 symbol=symbol,
                 side=exit_side,
                 type='STOP_MARKET',
@@ -344,7 +711,7 @@ class CreateOrderManager:
 
             # 4. Place Take Profit Bracket
             
-            tp_order = self.client.futures_create_order(
+            tp_order = await self.client.futures_create_order(
                 symbol=symbol,
                 side=exit_side,
                 type='TAKE_PROFIT_MARKET',
@@ -386,10 +753,11 @@ class CreateOrderManager:
 
 
 async def synchronize_orders(
+    client,
     symbol: str,
     order_id: int,
     poll_interval: float = 0.5,
-    max_wait_time: float = 30.0,
+    max_wait_time: float = 30.0
 ) -> Dict[Any, Any]:
     """
     Synchronizes order information with Binance.
@@ -453,14 +821,16 @@ async def synchronize_orders(
 
     return output
 
-async def direct_bet_execute(symbol: str, side: str) -> dict:
+async def direct_bet_execute(client, 
+                             rules_mgr,
+                             symbol: str, 
+                             side: str) -> dict:
     """
     Executes a direct bet (market order with SL and TP) for a given symbol and side.
     :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
     :param side: 'BUY' or 'SELL'.
     """
-    # Initialize Rule Manager and Order Manager
-    rules_mgr = SymbolRulesManager(client)
+
     order_mgr = CreateOrderManager(client, rules_mgr)
 
     # Load configuration
@@ -468,11 +838,19 @@ async def direct_bet_execute(symbol: str, side: str) -> dict:
     pct_offset = config.get("direct_bet_percentage", 0.005)
 
     # Get notional size and quantity
-    notional_size_mgr = NotonialSize(symbol)
-    raw_quantity = notional_size_mgr.get_quantity_from_notional()
-
+    notional_size_mgr = NotonialSize(symbol=symbol, client=client)
+    raw_quantity = await notional_size_mgr.get_quantity_from_notional()
+    print(f"the value of raw_qty is {raw_quantity}, symbol {symbol}, side: {side}") 
+    logger.debug(
+        "Ticker request: symbol=%s | "
+        "task=%s | loop=%s | client=%s",
+        symbol,
+        asyncio.current_task(),
+        asyncio.get_running_loop(),
+        id(client),
+                )
     # Fetch current price to compute SL & TP targets dynamically
-    ticker = client.futures_symbol_ticker(symbol=symbol)
+    ticker = await client.futures_symbol_ticker(symbol=symbol)
     current_price = float(ticker['price'])
     logger.info(f"Current Market Price for {symbol}: {current_price}")
 
