@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Any, Dict, List
-from binance.client import Client
+from binance import AsyncClient
 from typing import List
 from common_files.logger import get_logger
 from common_files.paths import load_json_file
@@ -17,7 +17,7 @@ from common_files.paths import MAIN_BALANCE_LIVE, CONFIG_LIVE_FILE, SECONDARY_BE
 
 logger = get_logger(__name__, log_live=True)
 
-client = Client(
+client = AsyncClient(
     api_key=os.getenv("BINANCE_API_KEY"),
     api_secret=os.getenv("BINANCE_API_SECRET")
 )
@@ -117,86 +117,116 @@ class NotonialSize:
 
 class SymbolRulesManager:
     """
-    This class manages the precision and filter rules for symbols on Binance Futures. 
-    It fetches the rules from the exchange and caches them for efficient access during 
-    order creation and validation.
-    Methods:
-        - refresh_symbol_rules: Fetches and caches symbol precision and filter rules from Binance Futures.
-        - format_quantity: Truncates quantity according to symbol stepSize.
-        - format_price: Rounds price according to symbol tickSize.
-        - validate_min_notional: Verifies if trade value exceeds Binance minimum notional value (e.g. $5 or $10 USDT).
-    Parameters:
-        - client: An instance of the Binance Client.
+    Manages Binance Futures symbol precision and filter rules.
     """
+
     def __init__(self, client):
         self.client = client
         self.rules_cache = {}
-        self.refresh_symbol_rules()
 
-    def refresh_symbol_rules(self):
+    @classmethod
+    async def create(cls, client):
         """
-        Fetches and caches symbol precision and filter rules from Binance Futures.
+        Creates and initializes the SymbolRulesManager.
+        """
+        instance = cls(client)
+        await instance.refresh_symbol_rules()
+        return instance
+
+    async def refresh_symbol_rules(self):
+        """
+        Fetches and caches symbol precision and filter rules
+        from Binance Futures.
         """
         try:
-            exchange_info = self.client.futures_exchange_info()
-            for symbol_info in exchange_info['symbols']:
-                symbol = symbol_info['symbol']
-                
-                # Extract filters
-                price_filter = next(f for f in symbol_info['filters'] if f['filterType'] == 'PRICE_FILTER')
-                lot_size_filter = next(f for f in symbol_info['filters'] if f['filterType'] == 'LOT_SIZE')
-                min_notional_filter = next((f for f in symbol_info['filters'] if f['filterType'] == 'MIN_NOTIONAL'), None)
+            exchange_info = await self.client.futures_exchange_info()
+
+            for symbol_info in exchange_info["symbols"]:
+                symbol = symbol_info["symbol"]
+
+                price_filter = next(
+                    f for f in symbol_info["filters"]
+                    if f["filterType"] == "PRICE_FILTER"
+                )
+
+                lot_size_filter = next(
+                    f for f in symbol_info["filters"]
+                    if f["filterType"] == "LOT_SIZE"
+                )
+
+                min_notional_filter = next(
+                    (
+                        f for f in symbol_info["filters"]
+                        if f["filterType"] == "MIN_NOTIONAL"
+                    ),
+                    None,
+                )
 
                 self.rules_cache[symbol] = {
-                    'tick_size': float(price_filter['tickSize']),
-                    'step_size': float(lot_size_filter['stepSize']),
-                    'min_qty': float(lot_size_filter['minQty']),
-                    'min_notional': float(min_notional_filter['notional']) if min_notional_filter else 5.0,
-                    'quantityPrecision': symbol_info['quantityPrecision'],
-                    'pricePrecision': symbol_info['pricePrecision']
+                    "tick_size": float(price_filter["tickSize"]),
+                    "step_size": float(lot_size_filter["stepSize"]),
+                    "min_qty": float(lot_size_filter["minQty"]),
+                    "min_notional": (
+                        float(min_notional_filter["notional"])
+                        if min_notional_filter
+                        else 5.0
+                    ),
+                    "quantityPrecision": symbol_info["quantityPrecision"],
+                    "pricePrecision": symbol_info["pricePrecision"],
                 }
-            logger.info("Successfully cached exchange rules for all symbols.")
+
+            logger.info(
+                "Successfully cached exchange rules for all symbols."
+            )
+
         except Exception as e:
-            logger.error(f"Failed to fetch exchange info: {e}")
+            logger.exception(
+                "Failed to fetch exchange info: %s",
+                e,
+            )
+            raise
 
     def format_quantity(self, symbol: str, quantity: float) -> float:
-        """
-        Truncates quantity according to symbol stepSize.
-        """
         rules = self.rules_cache.get(symbol)
+
         if not rules:
             return quantity
-        
-        step_size = rules['step_size']
-        precision = rules['quantityPrecision']
-        
-        # Round down to avoid exceeding available margin/balance
+
+        step_size = rules["step_size"]
+        precision = rules["quantityPrecision"]
+
         factored = math.floor(quantity / step_size) * step_size
+
         return round(factored, precision)
 
     def format_price(self, symbol: str, price: float) -> float:
-        """
-        Rounds price according to symbol tickSize.
-        """
         rules = self.rules_cache.get(symbol)
+
         if not rules:
             return price
-        
-        tick_size = rules['tick_size']
-        precision = rules['pricePrecision']
-        
+
+        tick_size = rules["tick_size"]
+        precision = rules["pricePrecision"]
+
         factored = round(price / tick_size) * tick_size
+
         return round(factored, precision)
 
-    def validate_min_notional(self, symbol: str, quantity: float, price: float) -> bool:
-        """
-        Verifies if trade value exceeds Binance minimum notional value (e.g. $5 or $10 USDT).
-        """
+    def validate_min_notional(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+    ) -> bool:
+
         rules = self.rules_cache.get(symbol)
+
         if not rules:
             return True
+
         notional_value = quantity * price
-        return notional_value >= rules['min_notional']
+
+        return notional_value >= rules["min_notional"]
 
 
 # ====================================================#
@@ -206,26 +236,26 @@ class GetOrders:
     def __init__(self, client):
         self.client = client
 
-    def get_all_orders(self, symbol):
+    async def get_all_orders(self, symbol):
         """
         Get all orders for a given symbol.
         :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
         :return: A list of all orders for the specified symbol.
         """
         try:
-            orders = self.client.futures_get_all_orders(symbol=symbol)
+            orders = await self.client.futures_get_all_orders(symbol=symbol)
             return orders
         except Exception as e:
             logger.error(f"Error fetching orders for {symbol}: {e}")
             return []
 
-    def get_all_positions(self):
+    async def get_all_positions(self):
         """
         Get all positions for the account.
         :return: A list of all positions.
         """
         try:
-            positions = self.client.futures_account_trades(limit=10)  # Adjust limit as needed
+            positions = await self.client.futures_account_trades(limit=10)  # Adjust limit as needed
             return positions
         except Exception as e:
             logger.error(f"Error fetching positions: {e}")
@@ -249,7 +279,7 @@ class CreateOrderManager:
         self.client = client
         self.rules_manager = rules_manager
 
-    def execute_bracket_market_trade(self, symbol: str, side: str, quantity: float, 
+    async def execute_bracket_market_trade(self, symbol: str, side: str, quantity: float, 
                                      stop_loss_price: float, take_profit_price: float) -> Dict[Any, Any]:
         """
         Executes a Market Entry Order and places corresponding SL and TP brackets on Binance Futures.
@@ -274,7 +304,7 @@ class CreateOrderManager:
         try:
             # 2. Execute Primary Direct Market Order
             logger.info(f"Submitting {side} Market Order for {symbol} | Qty: {formatted_qty}")
-            market_order = self.client.futures_create_order(
+            market_order = await self.client.futures_create_order(
                 symbol=symbol,
                 side=side,
                 type='MARKET',
@@ -328,21 +358,21 @@ class CreateOrderManager:
         except Exception as e:
             # EMERGENCY ROLLBACK: If SL or TP placement fails, immediately liquidate position!
             logger.critical(f"[{symbol}] Failed to place SL/TP brackets after entry! Executing emergency exit. Error: {e}")
-            self.client.futures_create_order(
+            await self.client.futures_create_order(
                 symbol=symbol, side=exit_side, type='MARKET', quantity=quantity, reduceOnly=True
             )
-            self.client.futures_cancel_all_open_orders(symbol=symbol)
+            await self.client.futures_cancel_all_open_orders(symbol=symbol)
             return {"status": "FAILED: ROLLBACK", "error": str(e)}
         return {"status": "SUCCESS", "data": market_order_data}
 
         
 
-    def cancel_all_symbol_orders(self, symbol: str):
+    async def cancel_all_symbol_orders(self, symbol: str):
         """
         Cleans up lingering open SL/TP orders when position closes.
         """
         try:
-            res = self.client.futures_cancel_all_open_orders(symbol=symbol)
+            res = await self.client.futures_cancel_all_open_orders(symbol=symbol)
             logger.info(f"Cancelled all open orders for {symbol}")
             return res
         except Exception as e:
@@ -355,7 +385,7 @@ class CreateOrderManager:
 # ====================================================#
 
 
-def synchronize_orders(
+async def synchronize_orders(
     symbol: str,
     order_id: int,
     poll_interval: float = 0.5,
@@ -399,7 +429,7 @@ def synchronize_orders(
     while (time.monotonic() - start_time) < max_wait_time:
 
         try:
-            order = client.futures_get_order(
+            order = await client.futures_get_order(
                 symbol=symbol,
                 orderId=order_id
                 )
@@ -423,7 +453,7 @@ def synchronize_orders(
 
     return output
 
-def direct_bet_execute(symbol: str, side: str) -> dict:
+async def direct_bet_execute(symbol: str, side: str) -> dict:
     """
     Executes a direct bet (market order with SL and TP) for a given symbol and side.
     :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
@@ -460,7 +490,7 @@ def direct_bet_execute(symbol: str, side: str) -> dict:
     logger.info(f"Calculated Targets -> TP: {tp_price:.7f} | SL: {sl_price:.7f}")
 
     # Execute the bracket market trade
-    result = order_mgr.execute_bracket_market_trade(
+    result = await order_mgr.execute_bracket_market_trade(
         symbol=symbol,
         side=side,
         quantity=raw_quantity,
@@ -477,18 +507,7 @@ def direct_bet_execute(symbol: str, side: str) -> dict:
     return result
 
 def main():
-    symbol = "1000PEPEUSDT"
-    side = "SELL"
-    result = direct_bet_execute(symbol, side)
-    data = result['data']
-    if result.get("status") == "SUCCESS":
-        order_id = data.get("orderId", {})
-        # after sending the order, check if it was filled and log the result
-        synchronized_orders = synchronize_orders(symbol, order_id)
-        # finally update orders
-        if len(synchronized_orders) > 0:
-            data.update(synchronized_orders)
-    logger.info(f"Pipeline executed, final values are: {data}")
+    print("invercrypto/strategy/common_files/binance_utils/orders.py module")
 
 if __name__ == "__main__":
     main()

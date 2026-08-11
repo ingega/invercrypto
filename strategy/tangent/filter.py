@@ -106,8 +106,11 @@ def add_entry(ticker:str, side:str, entry_price: float):
     logger.info(f"↩️ record was added to actual bets file with this value"
                 f"{json_bet}")
 
-def scan_tangent_opportunities(live=False):
-    config = load_json_file(CONFIG_FILE)
+async def scan_tangent_opportunities(live=False):
+    if live == False:
+        config = load_json_file(CONFIG_FILE)
+    else:
+        config = load_json_file(CONFIG_LIVE_FILE)
     tickers = load_json_file(TICKERS_FILE)["selected_tickers"]
     separation = config["separation"]
     threshold = config["threshold"]
@@ -120,7 +123,7 @@ def scan_tangent_opportunities(live=False):
     direct_bets = load_json_file(BET_FILE)
     secondary_bets = load_json_file(SECONDARY_BET_FILE)
     for ticker in tickers:
-        if not live:
+        if live == False:
             # avoid tickers in actual bet
             if ticker in direct_bets:
                 continue
@@ -139,15 +142,18 @@ def scan_tangent_opportunities(live=False):
             # tangent is: last close - first close / first close
             tangent_value = (last_close - first_close) / first_close
             entry_price = last_close
+            print(f"values of tangent for {ticker} tangent: {tangent_value}")
             if tangent_value >= threshold:
-                # add entry in BUY:
-                add_entry(ticker=ticker, side="BUY", entry_price=entry_price)
+                if live == False:
+                    # add entry in BUY:
+                    add_entry(ticker=ticker, side="BUY", entry_price=entry_price)
                 # add it to the return data
                 data = {"ticker": ticker, "tangent": tangent_value, "side": "BUY"}
                 found_opportunities.append(data)
             elif tangent_value <= -threshold:
-                # add entry in SELL
-                add_entry(ticker=ticker, side="SELL", entry_price=entry_price)
+                if live == False:
+                    # add entry in SELL
+                    add_entry(ticker=ticker, side="SELL", entry_price=entry_price)
                 # add it to the return data
                 data = {"ticker": ticker, "tangent": tangent_value, "side": "SELL"}
                 found_opportunities.append(data)

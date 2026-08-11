@@ -8,15 +8,11 @@ from database import query_tickets_in_bet, save_live_operation_to_db, query_orde
 from data_classes import CompletedLiveOperation, UpdateCompletedOperation
 from common_files.logger import get_logger
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
-from strategy.common_files.binance_utils.orders import direct_bet_execute, synchronize_orders
+from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders
 from tangent.filter import scan_tangent_opportunities
 from utils.timing import wait_for_time_trigger
 
-# create binance client
-client = Client(
-    api_key=os.getenv("BINANCE_API_KEY"),
-    api_secret=os.getenv("BINANCE_API_SECRET")
-)
+
 
 # init logger
 logger = get_logger(__name__, log_live=True)
@@ -28,6 +24,7 @@ async def calculate_capital(entry_price: float, qty: float) -> float:
     return entry_price * qty / leverage
 
 async def make_entry_pipeline(symbol, side):
+    print("=" * 10, "Start make entry pipeline ... ", "=" * 10)
     result = direct_bet_execute(symbol, side)
     data = result['data']
     if result.get("status") == "SUCCESS":
@@ -65,17 +62,23 @@ async def make_entry_pipeline(symbol, side):
         # inform
         logger.info(f"🟢 [DB] record added to the database successfully")
         return {"status": "SUCCESS", "message": "record added to the database"}
+    print("=" * 10, "End make entry pipeline ... ", "=" * 10)
     return {"status": "FAIL", "message": "failure in direct_bet_execute pipeline"}
 
 async def scan_for_opportunities() -> List[str | None]:
     final_list = []
-    oppor = scan_tangent_opportunities(live=True)
+    oppor = await scan_tangent_opportunities(live=True)
+    print("oppor content:", oppor)
     if len(oppor) > 0: # verify that there's no actual bet on that ticker
         # retrieve the tickers in an actual bet
-        tickers = query_tickets_in_bet()
-        for op in oppor:
-            if not op in tickers:
-                final_list.append(op)
+        tickers = await query_tickets_in_bet()
+        print("content of tickers: ", tickers)
+        active_symbols = {ticker[0] for ticker in tickers}
+        final_list = [
+                symbol
+                for symbol in oppor
+                if symbol not in active_symbols
+                ]
     return final_list
 
 async def entries_pipeline():
@@ -85,74 +88,110 @@ async def entries_pipeline():
     2. Save record in database
     3. Inform
     """
+    print("=" * 10, "start entries pipeline....", "=" * 10)
     # 1. Scan opportunities
-    oppor = scan_for_opportunities()
+    oppor = await scan_for_opportunities()
     # oppor contains ticker and side
     if oppor:
-        for op in oppor:
-            ticker, side = op["ticker"], op["side"]
-            await make_entry_pipeline(symbol=ticker, side=side)
-    print("no opportunities found")
+        try:
+            for op in oppor:
+                ticker, side = op["ticker"], op["side"]
+                await make_entry_pipeline(symbol=ticker, side=side)
+        except Exception as e:
+            print(f"error retrieving oppor, content: {oppor}, error: {e}")
+    else:
+        print("no opportunities found")
+    print("=" * 10, "end entries pipeline....", "=" * 10)
 
-async def verify_bet_result(msg):
+async def verify_bet_result(msg, client):
     """
     Event-driven callback triggered in real time when Binance fills an order.
     """
+    print("=" * 10, "start verify bet result....", "=" * 10)
     event_data = msg.get('o', {})
     symbol = event_data.get('s')
     order_status = event_data.get('X')  # FILLED, CANCELED, EXPIRED
     order_type = event_data.get('ot')   # STOP_MARKET, TAKE_PROFIT_MARKET, etc.
+
     if order_status == 'FILLED':
         logger.info(f"⚡ [EVENT TRIGGERED] {symbol} Order {order_type} FILLED!")
-        # 1. Check order_type
-        if order_type == 'STOP_MARKET': # sl wins
-            # A. Retrieve the order_id
+
+        if order_type == 'STOP_MARKET':  # SL triggered
+            # A. Retrieve the order_id from DB
             order_id, operation_id = query_order_id(ticker=symbol)
-            # B. Update information
+
             if order_id:
+                # B. Update Database
                 update_record = UpdateCompletedOperation(
                     outcome="SL",
-                    gain = -0.005,
+                    gain=-0.005,
                     profit=1,
-                    operation_id=operation_id # pyright: ignore[reportArgumentType]
+                    operation_id=operation_id
                 )
-                logger.info(f"🟥 [ORDER UPDATE] sl order with order {order_id} was executed and updated")
-            else:
-                logger.error(f"❌ [ORDER ID] order_id {order_id} could not be retrieved")
+                logger.info(f"🟥 [ORDER UPDATE] SL order {order_id} executed and updated")
 
+                # C. Use `client` to cancel lingering Take Profit orphan order!
+                await client.futures_cancel_all_open_orders(symbol=symbol)
+                logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
+
+            else:
+                logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
+
+    print("=" * 10, "... ends verify bet result", "=" * 10)
 
 async def start_user_stream(client):
+    print("=" * 10, "start user stream....", "=" * 10)
     bsm = BinanceSocketManager(client)
-    # Open user data stream for Binance Futures
     user_socket = bsm.futures_user_socket()
-    async with user_socket as stream:
-        while True:
-            msg = await stream.recv()
-            if msg.get('e') == 'ORDER_TRADE_UPDATE':
-                await verify_bet_result(msg)
+    try:
+        async with user_socket as stream:
+            while True:
+                msg = await stream.recv()
+                if msg.get("e") == "ORDER_TRADE_UPDATE":
+                    await verify_bet_result(
+                        msg,
+                        client,
+                    )
+    except asyncio.CancelledError:
+        logger.info("User stream task cancelled.")
+        raise
+    except Exception:
+        logger.exception("User stream failed.")
+        raise
+    finally:
+        print("=" * 10, "end user stream....", "=" * 10)
 
 async def main():
-    """
-    using Async mode, we can execute all pipeline in the main function
-    1. time trigger
-    2. Verify bets results
-    3. Scan for new opportunities
-    """
-    # retrieve data from config file
     config = load_json_file(CONFIG_LIVE_FILE)
     target_hour = config["target_hours"]
     target_minute = config["target_minutes"]
     target_second = config["target_seconds"]
-    while True:
-        # 1. time trigger
-        await wait_for_time_trigger(target_hour=target_hour, target_minute=target_minute, target_second=target_second)
-        # 2. verify bets result
-        await start_user_stream(client=client)
-        # 3. Scan for opportunities
-        await entries_pipeline()
-
-
-        
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
+    client = await AsyncClient.create(
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    user_stream_task = asyncio.create_task(
+        start_user_stream(client)
+    )
+    try:
+        while True:
+            # 1. Wait for execution window
+            await wait_for_time_trigger(
+                target_hour=target_hour,
+                target_minute=target_minute,
+                target_second=target_second,
+            )
+            # 2. Scan for new opportunities
+            await entries_pipeline()
+    finally:
+        user_stream_task.cancel()
+        try:
+            await user_stream_task
+        except asyncio.CancelledError:
+            pass
+        await client.close_connection()
            
 
 if __name__ == '__main__':

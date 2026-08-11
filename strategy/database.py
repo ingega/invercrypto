@@ -30,7 +30,6 @@ def init_operations_db() -> None:
         # Enable Write-Ahead Logging for high-frequency concurrency updates
         cursor.execute("PRAGMA journal_mode=WAL;")
         
-
 def save_operation_to_db(operation: CompletedOperation) -> int | None:
     """
     Safely records a resolved direct bet into the SQLite data layer.
@@ -371,7 +370,7 @@ def update_live_complete_operation(
 
 ##################### QUERY FUNCTIONS  #####################
 
-def query_tickets_in_bet():
+async def query_tickets_in_bet():
     """
     Verify if a ticker is in a bet
     """
@@ -380,7 +379,7 @@ def query_tickets_in_bet():
     WHERE outcome = 'UNRESOLVED';
     """
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(query)
             # return all tickers in bet
@@ -389,7 +388,7 @@ def query_tickets_in_bet():
     except sqlite3.Error as e:
            logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}") 
 
-def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
+async def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
     """
     Retrieve order_id from partial_operations
     for an unresolved completed operation.
@@ -404,7 +403,7 @@ def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
           AND completed_operations.outcome = 'UNRESOLVED';
     """
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(query, (ticker,))
             row = cursor.fetchone()
@@ -416,7 +415,7 @@ def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
         logger_live.error(
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
         )
-        return None
+        return None, None
  
 
 def main():
