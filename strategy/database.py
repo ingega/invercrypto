@@ -300,7 +300,7 @@ async def save_live_operation_to_db(live_operation: CompletedLiveOperation) -> i
     except sqlite3.Error as e:
        logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
 
-def save_live_partial_operation_to_db(partial_live_operation: PartialLiveOperation) -> int | None:
+async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveOperation) -> int | None:
     """
     Safely records a resolved partial bet into the SQLite data layer.
     """
@@ -436,7 +436,6 @@ async def query_capital(operation_id: int) -> float:
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
         )
         return 0.0
-
 
 def main():
     from data_classes import UpdatePartialOperation

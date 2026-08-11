@@ -187,6 +187,7 @@ class CompletedLiveOperation:
         self.profit
         )
 
+@dataclass
 class PartialLiveOperation:
     operation_id: int
     order_id: int
@@ -223,6 +224,7 @@ class PartialLiveOperation:
             self.bet
         )
 
+@dataclass
 class UpdateCompleteLiveOperation:
     exit_date: str
     outcome: str
@@ -245,6 +247,7 @@ class UpdateCompleteLiveOperation:
             self.operation_id
         )
 
+@dataclass
 class UpdatePartialLiveOPeration:
     exit_date: str
     exit_price: float

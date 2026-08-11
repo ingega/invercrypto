@@ -4,8 +4,8 @@ import os
 import time
 from binance import AsyncClient, BinanceSocketManager
 from typing import List
-from database import query_tickets_in_bet, save_live_operation_to_db, query_order_id, query_capital
-from data_classes import CompletedLiveOperation, UpdateCompletedOperation
+from database import query_tickets_in_bet, save_live_operation_to_db, query_order_id, query_capital, save_live_partial_operation_to_db
+from data_classes import CompletedLiveOperation, UpdateCompletedOperation, PartialLiveOperation, UpdatePartialLiveOPeration
 from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders, SymbolRulesManager, GetOrders
 from common_files.logger import get_logger
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
@@ -62,8 +62,29 @@ async def make_entry_pipeline(client, rules_mgr, symbol, side):
         )
         await save_live_operation_to_db(live_operation=completed_record)
         # inform
-        logger.info(f"🟢 [DB] record added to the database successfully")
-        return {"status": "SUCCESS", "message": "record added to the database"}
+        logger.info(f"🟢 [DB] complete record added to the database successfully")
+        # add the partial record to db
+        partial_record = PartialLiveOperation(
+            operation_id=operation_id,
+            order_id=order_id,
+            entry_date=data["timestamp"],
+            side=side,
+            entry_price=synchronized_orders["price"],
+            type="MARKET",
+            tp=data["tp"],
+            sl=data["sl"],
+            exit_date=data["timestamp"],
+            exit_price=synchronized_orders["price"],
+            outcome="UNRESOLVED",
+            gain=0,
+            pnl=0,
+            commission=0,
+            bet="D"
+        )
+        await save_live_partial_operation_to_db(partial_live_operation=partial_record)
+        logger.info(f"🟢 [DB] complete record added to the database successfully")
+
+        return {"status": "SUCCESS", "message": "records added to the database"}
     return {"status": "FAIL", "message": "failure in direct_bet_execute pipeline"}
 
 async def scan_for_opportunities() -> List[str | None]:
