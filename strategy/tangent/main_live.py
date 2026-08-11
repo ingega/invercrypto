@@ -135,6 +135,7 @@ async def verify_bet_result(msg, client):
         # get common data
         leverage = load_json_file(CONFIG_LIVE_FILE)["leverage"]
         if order_type == 'STOP_MARKET':  # SL triggered
+            logger.info(f" [SL] stop order was executed")
             # A. Retrieve the order_id from DB
             order_id, operation_id = await query_order_id(ticker=symbol)
             if order_id:
@@ -148,8 +149,6 @@ async def verify_bet_result(msg, client):
                 order_data = await GetOrders(client=client).get_order_execution(symbol=symbol, order_id=order_id)
                 pnl = order_data["realized_pnl"]
                 commission = order_data["commission"]
-                # get capital
-                
                 gain = 0
                 if capital > 0:
                     gain = ((pnl - commission) / leverage) / capital
@@ -169,6 +168,7 @@ async def verify_bet_result(msg, client):
                 logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
         elif order_type == 'TAKE_PROFIT':  # SL triggered
             # A. Retrieve the order_id from DB
+            logger.info(f" [TP] take profit order was executed")
             order_id, operation_id = await query_order_id(ticker=symbol)
             if order_id:
                 # B. Update Database, profit is the realized pnl, commission must be incluied as well, gain can 
@@ -197,6 +197,8 @@ async def verify_bet_result(msg, client):
                 logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
             else:
                 logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
+        else:
+            logger.info(f" [TYPE MISSMATCH] the order_type executed was a {order_type} type")
 
 async def start_user_stream(client):
     bsm = BinanceSocketManager(client)

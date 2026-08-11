@@ -305,8 +305,8 @@ async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveO
     Safely records a resolved partial bet into the SQLite data layer.
     """
     query = """
-        INSERT INTO completed_operations (
-            operation_id, order_id, entry_date, side, entry_price, type, tp, sl, exit_date, exit_ptice,
+        INSERT INTO partial_operations (
+            operation_id, order_id, entry_date, side, entry_price, type, tp, sl, exit_date, exit_price,
             outcome, gain, pnl, commission, bet
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """ 
@@ -359,6 +359,7 @@ def update_live_complete_operation(
                 update_record.as_tuple(),
             )
             conn.commit()
+            logger.info(f"🟢 [DB] Completed operation {update_record.operation_id} was updated susccessfully")
             return cursor.rowcount == 1
 
     except sqlite3.Error as e:
