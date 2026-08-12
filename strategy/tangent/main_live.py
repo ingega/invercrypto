@@ -159,8 +159,8 @@ async def verify_bet_result(msg, client):
                 # get pnl and commission
                 order_data = await GetOrders(client=client).get_order_execution(symbol=symbol, order_id=order_id)
                 print(f"{'=' * 10} value of order data: {order_data} {'=' * 10}")
-                pnl = order_data["realized_pnl"]
-                commission = order_data["commission"]
+                pnl = float(order_data["realized_pnl"])
+                commission = float(order_data["commission"])
                 gain = 0
                 if capital > 0:
                     gain = ((pnl - commission) / leverage) / capital
