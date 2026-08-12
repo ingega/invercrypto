@@ -702,6 +702,7 @@ class CreateOrderManager:
             )
             
             market_order_data['sl'] = float(sl_order.get('triggerPrice', 0))
+            market_order_data['sl_algo_id'] = sl_order.get('algoId', 0)
             logger.info(f"Stop Loss set at {formatted_sl}")
             timestamp = None
 
@@ -716,6 +717,8 @@ class CreateOrderManager:
             )
 
             market_order_data['tp'] = float(tp_order.get('triggerPrice', 0))
+            market_order_data['tp_algo_id'] = tp_order.get('algoId', 0)
+
             logger.info(f"Take Profit set at {formatted_tp}")
 
         except Exception as e:

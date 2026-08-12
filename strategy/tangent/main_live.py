@@ -3,8 +3,11 @@ import asyncio
 import os
 import time
 from binance import AsyncClient, BinanceSocketManager
+from datetime import datetime
 from typing import List
-from database import query_tickets_in_bet, save_live_operation_to_db, query_order_id, query_capital, save_live_partial_operation_to_db
+from database import query_tickets_in_bet, save_live_operation_to_db, query_order_id, query_capital, query_algo_id
+from database import save_live_partial_operation_to_db, save_partial_operation_to_db, update_live_complete_operation
+from database import update_live_partial_operation
 from data_classes import CompletedLiveOperation, UpdateCompletedOperation, PartialLiveOperation, UpdatePartialLiveOPeration
 from common_files.binance_utils.orders import direct_bet_execute, synchronize_orders, SymbolRulesManager, GetOrders
 from common_files.logger import get_logger
@@ -73,6 +76,8 @@ async def make_entry_pipeline(client, rules_mgr, symbol, side):
             type="MARKET",
             tp=data["tp"],
             sl=data["sl"],
+            tp_algo_id=data["tp_algo_id"],
+            sl_algo_id=data["sl_algo_id"],
             exit_date=data["timestamp"],
             exit_price=synchronized_orders["price"],
             outcome="UNRESOLVED",
@@ -82,7 +87,7 @@ async def make_entry_pipeline(client, rules_mgr, symbol, side):
             bet="D"
         )
         await save_live_partial_operation_to_db(partial_live_operation=partial_record)
-        logger.info(f"🟢 [DB] complete record added to the database successfully")
+        logger.info(f"🟢 [DB] partial record added to the database successfully")
 
         return {"status": "SUCCESS", "message": "records added to the database"}
     return {"status": "FAIL", "message": "failure in direct_bet_execute pipeline"}
@@ -128,16 +133,22 @@ async def verify_bet_result(msg, client):
     event_data = msg.get('o', {})
     symbol = event_data.get('s')
     order_status = event_data.get('X')  # FILLED, CANCELED, EXPIRED
-    order_type = event_data.get('ot')   # STOP_MARKET, TAKE_PROFIT_MARKET, etc.
-
+    strategy_id = event_data.get('si')   # STOP_MARKET, TAKE_PROFIT_MARKET, etc.
     if order_status == 'FILLED':
-        logger.info(f"⚡ [EVENT TRIGGERED] {symbol} Order {order_type} FILLED!")
+        # if strategy_id is 0, is because is the original market order
+        if strategy_id == 0:
+            return
+        logger.info(f"⚡ [EVENT TRIGGERED] {symbol} Order {strategy_id} FILLED!")
+        # retrieve algo id's
+        order_id, operation_id = await query_order_id(ticker=symbol)
+        tp_algo_id, sl_algo_id = await query_algo_id(operation_id=operation_id)
+        logger.debug(f"content of order_id, operation_id, tp_algo_id, sl_algo_id"
+                     f"{order_id}, {operation_id}, {tp_algo_id}, {sl_algo_id}")
         # get common data
         leverage = load_json_file(CONFIG_LIVE_FILE)["leverage"]
-        if order_type == 'STOP_MARKET':  # SL triggered
+        if strategy_id == sl_algo_id:  # SL triggered
             logger.info(f" [SL] stop order was executed")
             # A. Retrieve the order_id from DB
-            order_id, operation_id = await query_order_id(ticker=symbol)
             if order_id:
                 # B. Update Database, profit is the realized pnl, commission must be incluied as well, gain can 
                 # be calculated with the original capital and leverage
@@ -147,6 +158,7 @@ async def verify_bet_result(msg, client):
                 capital = await query_capital(operation_id=operation_id)
                 # get pnl and commission
                 order_data = await GetOrders(client=client).get_order_execution(symbol=symbol, order_id=order_id)
+                print(f"{'=' * 10} value of order data: {order_data} {'=' * 10}")
                 pnl = order_data["realized_pnl"]
                 commission = order_data["commission"]
                 gain = 0
@@ -159,6 +171,22 @@ async def verify_bet_result(msg, client):
                     profit=profit,
                     operation_id=operation_id
                 )
+                await update_live_complete_operation(update_record=update_record)
+                # update partial record as well
+                exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # the orderId assigned is retrieved for GetOrders
+                new_order_id = order_data["orderId"]
+                partial_update_record = UpdatePartialLiveOPeration(
+                    order_id=new_order_id,
+                    exit_date=exit_date,
+                    exit_price=0,
+                    outcome="SL",
+                    gain=gain,
+                    pnl=pnl,
+                    commission=commission,
+                    operation_id=operation_id
+                )
+                await update_live_partial_operation(update_record=partial_update_record)
                 logger.info(f"🟥 [ORDER UPDATE] SL order {order_id} executed and updated")
 
                 # C. Use `client` to cancel lingering Take Profit orphan order!
@@ -166,7 +194,7 @@ async def verify_bet_result(msg, client):
                 logger.info(f"🧹 [ORPHAN CLEANUP] Canceled lingering TP orders for {symbol}")
             else:
                 logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
-        elif order_type == 'TAKE_PROFIT':  # SL triggered
+        elif strategy_id == tp_algo_id:  # TP triggered
             # A. Retrieve the order_id from DB
             logger.info(f" [TP] take profit order was executed")
             order_id, operation_id = await query_order_id(ticker=symbol)
@@ -179,6 +207,7 @@ async def verify_bet_result(msg, client):
                 capital = await query_capital(operation_id=operation_id)
                 # get pnl and commission
                 order_data = await GetOrders(client=client).get_order_execution(symbol=symbol, order_id=order_id)
+                print(f"{'=' * 10} value of order data: {order_data} {'=' * 10}")
                 pnl = order_data["realized_pnl"]
                 commission = order_data["commission"]
                 gain = 0
@@ -198,28 +227,61 @@ async def verify_bet_result(msg, client):
             else:
                 logger.error(f"❌ [ORDER ID] order_id for {symbol} could not be retrieved")
         else:
-            logger.info(f" [TYPE MISSMATCH] the order_type executed was a {order_type} type")
+            logger.info(f" [TYPE MISSMATCH] the order_type executed was a {strategy_id} type")
 
 async def start_user_stream(client):
     bsm = BinanceSocketManager(client)
     user_socket = bsm.futures_user_socket()
     try:
+        logger.info(
+            "Starting Binance Futures user stream. "
+            "Task=%s",
+            asyncio.current_task().get_name(),
+        )
         async with user_socket as stream:
+            logger.info(
+                "Binance Futures WebSocket connected. "
+                "Task=%s",
+                asyncio.current_task().get_name(),
+            )
             while True:
                 msg = await stream.recv()
+                logger.debug(
+                    "WebSocket message received: %s",
+                    msg,
+                )
                 if msg.get("e") == "ORDER_TRADE_UPDATE":
+                    logger.info(
+                        "ORDER_TRADE_UPDATE received: "
+                        "symbol=%s",
+                        msg.get("o", {}).get("s"),
+                    )
+                    logger.info(f" [MSG] complete msg content: {msg}")
                     await verify_bet_result(
                         msg,
                         client,
                     )
     except asyncio.CancelledError:
-        logger.info("User stream task cancelled.")
+        task = asyncio.current_task()
+        logger.warning(
+            "USER STREAM CANCELLED! "
+            "task=%s, cancelling=%s, "
+            "task_done=%s, task_cancelled=%s",
+            task.get_name() if task else None,
+            task.cancelling() if task else None,
+            task.done() if task else None,
+            task.cancelled() if task else None,
+        )
         raise
     except Exception:
-        logger.exception("User stream failed.")
+        logger.exception(
+            "USER STREAM FAILED WITH EXCEPTION."
+        )
         raise
     finally:
-        print("Binance Futures user stream closed")
+        logger.info(
+            "Binance Futures user stream closed."
+        )
 
 async def main():
     config = load_json_file(CONFIG_LIVE_FILE)

@@ -197,6 +197,8 @@ class PartialLiveOperation:
     type: str
     tp: float
     sl: float
+    tp_algo_id: int
+    sl_algo_id: int
     exit_date: str
     exit_price: float
     outcome: str
@@ -215,6 +217,8 @@ class PartialLiveOperation:
             self.type,
             self.tp,
             self.sl,
+            self.tp_algo_id,
+            self.sl_algo_id,
             self.exit_date,
             self.exit_price,
             self.outcome,
@@ -249,21 +253,25 @@ class UpdateCompleteLiveOperation:
 
 @dataclass
 class UpdatePartialLiveOPeration:
+    order_id: int
     exit_date: str
     exit_price: float
     outcome: str
     gain: float
     pnl: float
     commission: float
+    operation_id: int
 
     def as_tuple(self) -> Tuple:
         return(
+            self.order_id,
             self.exit_date,
             self.exit_price,
             self.outcome,
             self.gain,
             self.pnl,
-            self.commission
+            self.commission,
+            self.operation_id
         )
 
 ###############  JSON DATACLASSES  ################

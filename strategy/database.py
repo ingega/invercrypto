@@ -306,9 +306,9 @@ async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveO
     """
     query = """
         INSERT INTO partial_operations (
-            operation_id, order_id, entry_date, side, entry_price, type, tp, sl, exit_date, exit_price,
+            operation_id, order_id, entry_date, side, entry_price, type, tp, sl, tp_algo_id, sl_algo_id, exit_date, exit_price,
             outcome, gain, pnl, commission, bet
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """ 
     try:
         with sqlite3.connect(DB_LIVE_PATH) as conn:
@@ -331,8 +331,8 @@ async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveO
 
 ##################### UPDATE FUNCTIONS  ######################
 
-def update_live_complete_operation(
-    update_record: UpdateCompletedOperation,
+async def update_live_complete_operation(
+    update_record: UpdateCompletedOperation
 ) -> bool:
     """
     Updates a completed operation with exit information.
@@ -368,6 +368,42 @@ def update_live_complete_operation(
         )
         return False
 
+async def update_live_partial_operation(
+    update_record: UpdatePartialLiveOPeration,
+) -> bool:
+    """
+    Updates a completed operation with exit information.
+    """
+
+    query = """
+        UPDATE completed_operations
+        SET
+            order_id = ?,
+            exit_date = ?,
+            exit_price = ?,
+            outcome = ?,
+            gain = ?,
+            pnl = ?,
+            commission = ?,
+        WHERE operation_id = ?;
+    """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                query,
+                update_record.as_tuple(),
+            )
+            conn.commit()
+            logger.info(f"🟢 [DB] Partial operation {update_record.operation_id} was updated susccessfully")
+            return cursor.rowcount == 1
+
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE UPDATE FAILURE: {e}"
+        )
+        return False
+
 
 ##################### QUERY FUNCTIONS  #####################
 
@@ -389,13 +425,17 @@ async def query_tickets_in_bet():
     except sqlite3.Error as e:
            logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}") 
 
-async def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
+async def query_order_id(
+    ticker: str,
+) -> Tuple[int | None, int | None]:
     """
-    Retrieve order_id from partial_operations
+    Retrieve order_id and operation_id from partial_operations
     for an unresolved completed operation.
     """
     query = """
-        SELECT partial_operations.order_id, partial_operations.operation_id
+        SELECT
+            partial_operations.order_id,
+            partial_operations.operation_id
         FROM partial_operations
         INNER JOIN completed_operations
             ON partial_operations.operation_id =
@@ -410,8 +450,7 @@ async def query_order_id(ticker: str) -> Tuple[int | None, int | None]:
             row = cursor.fetchone()
             if row is None:
                 return None, None
-            return row[0]
-
+            return row
     except sqlite3.Error as e:
         logger_live.error(
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
@@ -437,6 +476,29 @@ async def query_capital(operation_id: int) -> float:
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
         )
         return 0.0
+
+async def query_algo_id(operation_id: int):
+    query = """
+        SELECT tp_algo_id, sl_algo_id
+        FROM partial_operations
+        WHERE operation_id = ?
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return row
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE ALGO_ID QUERY FAILURE: {e}"
+        )
+        return None
+
+
 
 def main():
     from data_classes import UpdatePartialOperation
