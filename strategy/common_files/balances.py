@@ -5,6 +5,326 @@ from common_files.paths import *
 
 logger = get_logger(__name__)
 
+# provide a different _name__ for mapping correctly
+logger_live = get_logger(
+    f"{__name__}.live", # e.g. balance.live
+    log_live=True,
+)
+
+# class for updating balances in live mode
+
+class LiveUpdateBalances:
+    """
+    Manages the live trading balances and risk reservation.
+    The trading model works as follows:
+        1. A percentage of the CURRENT available balance is allocated
+           to a position.
+        2. Leverage increases the position's notional exposure.
+        3. The maximum SL percentage determines the maximum potential
+           loss of that leveraged position.
+        4. That maximum potential loss is reserved from the
+           available balance.
+    Example
+    -------
+    Main balance:
+        $1,000
+    Entry percentage:
+        5%
+    Position capital:
+        $1,000 × 0.05 = $50
+    Leverage:
+        20x
+    Notional exposure:
+        $50 × 20 = $1,000
+    Maximum SL:
+        10%
+    Maximum potential loss:
+        $1,000 × 0.10 = $100
+    Therefore:
+        Main balance     = $1,000
+        Available balance = $1,000 - $100 = $900
+    The next position is calculated using the new available balance:
+        $900 × 5% = $45
+        $45 × 20 × 10% = $90 reserved
+    This creates a dynamic risk budget where each new position
+    consumes a percentage of the remaining available balance.
+    Parameters
+    ----------
+    capital:
+        Position capital allocated by the strategy.
+    """
+    def __init__(self, capital: float) -> None:
+        """
+        Initialize the balance manager.
+        Parameters
+        ----------
+        capital:
+            Position capital allocated to the current operation.
+        """
+        self.capital = float(capital)
+
+    # ------------------------------------------------------------------
+    # Internal balance update
+    # ------------------------------------------------------------------
+
+    def _update_balance(self, balance_key: str) -> None:
+        """
+        Apply self.capital to a specific balance.
+        The current balance file is loaded immediately before the
+        update to avoid working with stale in-memory data.
+        Parameters
+        ----------
+        balance_key:
+            JSON key to update.
+            Supported values:
+                - "main_balance"
+                - "available_balance"
+        """
+        try:
+            balances = load_json_file(LIVE_BALANCES)
+            old_balance = float(
+                balances.get(balance_key, 0.0)
+            )
+            new_balance = round(
+                old_balance + self.capital,
+                2,
+            )
+            # Prevent accidental negative balances.
+            if new_balance < 0:
+                raise ValueError(
+                    f"Balance '{balance_key}' cannot become negative. "
+                    f"old={old_balance:.2f}, "
+                    f"delta={self.capital:.2f}, "
+                    f"new={new_balance:.2f}"
+                )
+            balances[balance_key] = new_balance
+            save_json_file(
+                LIVE_BALANCES,
+                balances,
+            )
+            logger_live.info(
+                "🏛️ [%s] balance updated: %.2f → %.2f "
+                "(delta=%+.2f)",
+                balance_key.upper(),
+                old_balance,
+                new_balance,
+                self.capital,
+            )
+        except Exception:
+            logger_live.exception(
+                "❌ [%s] failed to update balance.",
+                balance_key.upper(),
+            )
+            raise
+
+    # ------------------------------------------------------------------
+    # Main balance
+    # ------------------------------------------------------------------
+
+    def update_main_balance(self) -> None:
+        """
+        Update the main balance using self.capital.
+        Positive capital increases the balance.
+        Negative capital decreases the balance.
+        Example
+        -------
+        capital = +25.50
+            1000.00 → 1025.50
+        capital = -25.50
+            1000.00 → 974.50
+        """
+
+        self._update_balance("main_balance")
+
+    # ------------------------------------------------------------------
+    # Available balance
+    # ------------------------------------------------------------------
+
+    def update_available_balance(self) -> None:
+        """
+        Update the available balance using self.capital.
+        This is normally used when reserving or releasing capital
+        associated with active positions.
+        """
+
+        self._update_balance("available_balance")
+
+    # ------------------------------------------------------------------
+    # Collateral / maximum-loss calculation
+    # ------------------------------------------------------------------
+
+    def calculate_collateral(self) -> float:
+        """
+        Calculate and reserve the maximum potential loss of the
+        leveraged position.
+        The calculation is:
+            collateral =
+                position_capital
+                × leverage
+                × max_sl
+        Example
+        -------
+        position_capital = $50
+        leverage         = 20x
+        max_sl            = 10%
+        Notional exposure:
+            $50 × 20 = $1,000
+        Maximum potential loss:
+            $1,000 × 0.10 = $100
+        Therefore $100 is reserved from available balance.
+        Returns
+        -------
+        float
+            The collateral reserved for the position.
+        """
+        try:
+            config = load_json_file(CONFIG_LIVE_FILE)
+            max_sl = float(
+                config.get("sl_percentage", 0.10)
+            )
+            leverage = float(
+                config.get("leverage", 20)
+            )
+            position_capital = self.capital
+            if position_capital <= 0:
+                raise ValueError(
+                    f"Position capital must be positive. "
+                    f"Received: {position_capital}"
+                )
+            if leverage <= 0:
+                raise ValueError(
+                    f"Leverage must be positive. "
+                    f"Received: {leverage}"
+                )
+            if not 0 < max_sl <= 1:
+                raise ValueError(
+                    f"SL percentage must be between 0 and 1. "
+                    f"Received: {max_sl}"
+                )
+
+            # ----------------------------------------------------------
+            # Calculate leveraged notional exposure.
+            # ----------------------------------------------------------
+
+            notional_exposure = (
+                position_capital * leverage
+            )
+
+            # ----------------------------------------------------------
+            # Calculate maximum potential loss.
+            #
+            # This is the amount we must reserve from the
+            # available balance to protect against the configured
+            # maximum SL.
+            # ----------------------------------------------------------
+
+            collateral = round(
+                notional_exposure * max_sl,
+                2,
+            )
+
+            logger_live.info(
+                "🏛️ [COLLATERAL] position_capital=%.2f | "
+                "leverage=%.2fx | notional=%.2f | "
+                "max_sl=%.2f%% | collateral=%.2f",
+                position_capital,
+                leverage,
+                notional_exposure,
+                max_sl * 100,
+                collateral,
+            )
+            return collateral
+        except Exception:
+            logger_live.exception(
+                "❌ [COLLATERAL] failed to calculate/update collateral."
+            )
+            raise
+
+    def reserve_collateral(self):            
+        # ----------------------------------------------------------
+        # Reserve collateral from available balance.
+        # ----------------------------------------------------------
+        collateral = self.calculate_collateral()
+        self.capital = -collateral
+        self.update_available_balance()
+        logger_live.info(
+            "🏛️ [COLLATERAL] %.2f reserved from available balance.",
+            collateral,
+        )
+
+    def update_ticker_balance(self, ticker: str, gain:float):
+        """
+        update the individual ticker balance
+        constraints:
+            ticker balance never is above 1.0 and below config["minimum_bet]
+        ---------------------
+        params:
+            ticker(str) - Name of the ticker e.g. "BTCUSDT"
+            gain(float) - gain of the operation e.g. 0.01 or -0.01
+        """
+        # open the ticker balance json file
+        ticker_balance_file = load_json_file(TICKERS_BALANCES_LIVE)
+        ticker_balance = ticker_balance_file.get(ticker)
+        # get the minimum value for balance
+        minimum_ticker_balance = load_json_file(CONFIG_LIVE_FILE).get("minimum_bet", 0.005)
+        if ticker_balance is None:
+            logger_live.error(f"❌ [TICKER BALANCE] ticker {ticker} does not exist in {TICKERS_BALANCES_LIVE} file")
+            raise ValueError(f"Invalid value: {ticker}")
+        actual_balance = ticker_balance["actual_balance"]
+        new_balance = actual_balance + gain
+        if new_balance > 1.0:
+            new_balance = 1.0
+        elif new_balance < minimum_ticker_balance:
+            new_balance = minimum_ticker_balance
+        ticker_balance_file[ticker]["actual_balance"] = new_balance
+        save_json_file(TICKERS_BALANCES_LIVE, ticker_balance_file)
+        logger.info(f"🏛️ [BALANCES] {ticker} balance was succesfully updated from {actual_balance} to {new_balance}")
+
+
+
+
+def update_all_balances(profit: float, capital: float, gain: float, ticker: str):
+    """
+    Every time that an operation complete its cycle, all balances must be updated:
+    ---------------------
+    main balance
+    ---------------------
+    :param: profit(float) - net profit of the operation e.g. -100 (usdt) or 100 (usdt)
+    update the main balance acording param profit
+    
+    ---------------------
+    available balance
+    ---------------------
+    :param: capital(float) - capital used in the position e.g. 100 (usdt) 
+    update the available balance using param capital for calculations
+
+    ---------------------
+    ticker balance
+    ---------------------
+    :param: ticker(str) - name of ticker e.g. "BTCUSDT"
+    :param: gain(float) - gain of the operation e.g. 0.02
+    the ticker balance is updated with param gain
+    """
+    # 1. update main balance
+    balances = LiveUpdateBalances(capital=profit)
+    balances.update_main_balance()
+
+    # 2. update available balance
+
+    # A. get a new instance of LiveUpdateBalance for new calculations
+    available_balances = LiveUpdateBalances(capital=capital)
+    collateral = available_balances.calculate_collateral()
+    # B. with collateral calculated, again build a new instance for balances
+    updated_available_balances = LiveUpdateBalances(capital=collateral)
+    # finally update available balance
+    updated_available_balances.update_available_balance()
+
+    # 3. update ticker balance 
+    # in this case we can use any instance, capital parameter is not used for ticker balance update
+    balances.update_ticker_balance(ticker=ticker, gain=gain)
+
+    logger_live.info(f"✅ [UPDATE BALANCES] all balances was updated")
+
 # ticker balance
 def reset_ticker_balance():
     # get tickers

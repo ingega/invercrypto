@@ -10,11 +10,12 @@ import time
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Any, Dict, List
+import aiohttp
 from binance import AsyncClient
 from typing import List
 from common_files.logger import get_logger
 from common_files.paths import load_json_file
-from common_files.paths import MAIN_BALANCE_LIVE, CONFIG_LIVE_FILE, SECONDARY_BETS_LIVE, TICKERS_BALANCES_LIVE
+from common_files.paths import LIVE_BALANCES, CONFIG_LIVE_FILE, SECONDARY_BETS_LIVE, TICKERS_BALANCES_LIVE
 
 logger = get_logger(__name__, log_live=True)
 
@@ -33,7 +34,7 @@ class NotonialSize:
         - open_files: Opens the necessary files for reading/writing.
     """
     def __init__(self, symbol, client):
-        self.main_balance = None
+        self.available_balance = None
         self.config = {}
         self.secondary_bets = {}
         self.tickers_balances = {}
@@ -47,8 +48,8 @@ class NotonialSize:
         Opens the necessary files for reading/writing.
         """
         try:
-            with open(MAIN_BALANCE_LIVE, 'r') as f:
-                self.main_balance = json.load(f).get("main_balance", 0.0)
+            with open(LIVE_BALANCES, 'r') as f:
+                self.available_balance = json.load(f).get("available_balance", 0.0)
             with open(CONFIG_LIVE_FILE, 'r') as f:
                 self.config = json.load(f)
             with open(SECONDARY_BETS_LIVE, 'r') as f:
@@ -74,13 +75,13 @@ class NotonialSize:
         """
         print(f"{'=' * 10} start get_notional_size...{'=' * 10}")
         try:
-            main_balance = self.main_balance
+            available_balance = self.available_balance
             size_percentage = self.config.get("size_percentage", 0.07)  # Default to 1% if not set
             leverage = self.config.get("leverage", 3)  # Default to 3x if not set
             ticker_balance = self.tickers_balances.get(self.symbol, 0.0)["actual_balance"]
-            print(f"Calculating notional size for {self.symbol}: main_balance={main_balance}, "
+            print(f"Calculating notional size for {self.symbol}: main_balance={available_balance}, "
                   f"size_percentage={size_percentage}, leverage={leverage}, ticker_balance={ticker_balance}")
-            notional_size = main_balance * size_percentage * leverage * ticker_balance
+            notional_size = available_balance * size_percentage * leverage * ticker_balance
             print(f"notional size is: {notional_size}")
             return notional_size
         except Exception as e:
@@ -128,13 +129,62 @@ class SymbolRulesManager:
         self.rules_cache = {}
 
     @classmethod
-    async def create(cls, client):
+    async def create(
+        cls,
+        client,
+        retries: int = 5,
+        retry_delay: float = 1.0,
+    ):
         """
         Creates and initializes the SymbolRulesManager.
+        Retries exchange-info retrieval when Binance temporarily
+        fails to respond.
         """
         instance = cls(client)
-        await instance.refresh_symbol_rules()
-        return instance
+        for attempt in range(1, retries + 1):
+            try:
+                if attempt > 1:
+                    logger.info(
+                        "Initializing SymbolRulesManager "
+                        "(attempt %d/%d)...",
+                        attempt,
+                        retries,
+                    )
+                await instance.refresh_symbol_rules()
+                if attempt > 1:
+                    logger.info(
+                        "SymbolRulesManager initialized successfully."
+                    )
+                return instance
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Timeout retrieving Binance exchange info "
+                    "(attempt %d/%d). Retrying in %.1f seconds...",
+                    attempt,
+                    retries,
+                    retry_delay,
+                )
+            except aiohttp.ClientError:
+                logger.exception(
+                    "Network error retrieving Binance exchange info "
+                    "(attempt %d/%d).",
+                    attempt,
+                    retries,
+                )
+            except Exception:
+                logger.exception(
+                    "Unexpected error initializing "
+                    "SymbolRulesManager "
+                    "(attempt %d/%d).",
+                    attempt,
+                    retries,
+                )
+            if attempt < retries:
+                await asyncio.sleep(retry_delay)
+        raise RuntimeError(
+            "Unable to initialize SymbolRulesManager after "
+            f"{retries} attempts."
+        )
 
     async def refresh_symbol_rules(self):
         """
@@ -143,20 +193,16 @@ class SymbolRulesManager:
         """
         try:
             exchange_info = await self.client.futures_exchange_info()
-
             for symbol_info in exchange_info["symbols"]:
                 symbol = symbol_info["symbol"]
-
                 price_filter = next(
                     f for f in symbol_info["filters"]
                     if f["filterType"] == "PRICE_FILTER"
                 )
-
                 lot_size_filter = next(
                     f for f in symbol_info["filters"]
                     if f["filterType"] == "LOT_SIZE"
                 )
-
                 min_notional_filter = next(
                     (
                         f for f in symbol_info["filters"]
@@ -164,7 +210,6 @@ class SymbolRulesManager:
                     ),
                     None,
                 )
-
                 self.rules_cache[symbol] = {
                     "tick_size": float(price_filter["tickSize"]),
                     "step_size": float(lot_size_filter["stepSize"]),
@@ -730,8 +775,6 @@ class CreateOrderManager:
             await self.client.futures_cancel_all_open_orders(symbol=symbol)
             return {"status": "FAILED: ROLLBACK", "error": str(e)}
         return {"status": "SUCCESS", "data": market_order_data}
-
-        
 
     async def cancel_all_symbol_orders(self, symbol: str):
         """

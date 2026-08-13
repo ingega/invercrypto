@@ -62,6 +62,7 @@ MAIN_LIVE_STATE_FOLDER.mkdir(parents=True, exist_ok=True)
 
 MAIN_BALANCE_LIVE = MAIN_LIVE_STATE_FOLDER / "main_balance.json"
 AVAILABLE_BALANCE_LIVE = MAIN_LIVE_STATE_FOLDER / "available_balance.json"
+LIVE_BALANCES = MAIN_LIVE_STATE_FOLDER / "live_balances.json"
 TICKERS_BALANCES_LIVE = MAIN_LIVE_STATE_FOLDER / "tickers_balances.json"
 
 # bets

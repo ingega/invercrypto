@@ -9,7 +9,12 @@ from common_files.logger import get_logger
 from common_files.paths import DB_PATH, DB_LIVE_PATH
 
 logger = get_logger(__name__)
-logger_live = get_logger(__name__, log_live=True)
+
+# provide a different name, for mapping
+logger_live = get_logger(
+    f"{__name__}.live",
+    log_live=True,
+)
     
     
 def init_operations_db() -> None:
@@ -332,7 +337,7 @@ async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveO
 ##################### UPDATE FUNCTIONS  ######################
 
 async def update_live_complete_operation(
-    update_record: UpdateCompletedOperation
+    update_record: UpdateCompleteLiveOperation
 ) -> bool:
     """
     Updates a completed operation with exit information.
@@ -359,7 +364,7 @@ async def update_live_complete_operation(
                 update_record.as_tuple(),
             )
             conn.commit()
-            logger.info(f"🟢 [DB] Completed operation {update_record.operation_id} was updated susccessfully")
+            logger_live.info(f"🟢 [DB] Completed operation {update_record.operation_id} was updated susccessfully")
             return cursor.rowcount == 1
 
     except sqlite3.Error as e:
@@ -376,7 +381,7 @@ async def update_live_partial_operation(
     """
 
     query = """
-        UPDATE completed_operations
+        UPDATE partial_operations
         SET
             order_id = ?,
             exit_date = ?,
@@ -384,7 +389,7 @@ async def update_live_partial_operation(
             outcome = ?,
             gain = ?,
             pnl = ?,
-            commission = ?,
+            commission = ?
         WHERE operation_id = ?;
     """
     try:
@@ -395,12 +400,12 @@ async def update_live_partial_operation(
                 update_record.as_tuple(),
             )
             conn.commit()
-            logger.info(f"🟢 [DB] Partial operation {update_record.operation_id} was updated susccessfully")
+            logger_live.info(f"🟢 [DB] Partial operation {update_record.operation_id} was updated susccessfully")
             return cursor.rowcount == 1
 
     except sqlite3.Error as e:
         logger_live.error(
-            f"❌ DATABASE UPDATE FAILURE: {e}"
+            f"❌ DATABASE PARTIAL UPDATE FAILURE: {e}"
         )
         return False
 
@@ -425,21 +430,17 @@ async def query_tickets_in_bet():
     except sqlite3.Error as e:
            logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}") 
 
-async def query_order_id(
+async def query_operation_id(
     ticker: str,
-) -> Tuple[int | None, int | None]:
+) -> int | None:
     """
     Retrieve order_id and operation_id from partial_operations
     for an unresolved completed operation.
     """
     query = """
         SELECT
-            partial_operations.order_id,
-            partial_operations.operation_id
-        FROM partial_operations
-        INNER JOIN completed_operations
-            ON partial_operations.operation_id =
-               completed_operations.operation_id
+            operation_id
+        FROM completed_operations
         WHERE completed_operations.ticker = ?
           AND completed_operations.outcome = 'UNRESOLVED';
     """
@@ -449,13 +450,13 @@ async def query_order_id(
             cursor.execute(query, (ticker,))
             row = cursor.fetchone()
             if row is None:
-                return None, None
-            return row
+                return None
+            return row[0]
     except sqlite3.Error as e:
         logger_live.error(
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
         )
-        return None, None
+        return None
 
 async def query_capital(operation_id: int) -> float:
     query = """
