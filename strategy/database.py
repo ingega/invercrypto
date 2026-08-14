@@ -280,9 +280,9 @@ async def save_live_operation_to_db(live_operation: CompletedLiveOperation) -> i
     """
     query = """
         INSERT INTO completed_operations (
-            operation_id, strategy, ticker, entry_date, capital, quantity, exit_date, 
+            operation_id, strategy, ticker, entry_date, capital, collateral, quantity, exit_date, 
             outcome, gain, pnl, commission, fee, profit  
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """ 
     try:
         with sqlite3.connect(DB_LIVE_PATH) as conn:
@@ -311,9 +311,9 @@ async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveO
     """
     query = """
         INSERT INTO partial_operations (
-            operation_id, order_id, entry_date, side, entry_price, type, tp, sl, tp_algo_id, sl_algo_id, exit_date, exit_price,
+            operation_id, order_id, exit_order_id, entry_date, side, entry_price, type, tp, sl, tp_algo_id, sl_algo_id, exit_date, exit_price,
             outcome, gain, pnl, commission, bet
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """ 
     try:
         with sqlite3.connect(DB_LIVE_PATH) as conn:
@@ -383,7 +383,7 @@ async def update_live_partial_operation(
     query = """
         UPDATE partial_operations
         SET
-            order_id = ?,
+            exit_order_id = ?,
             exit_date = ?,
             exit_price = ?,
             outcome = ?,

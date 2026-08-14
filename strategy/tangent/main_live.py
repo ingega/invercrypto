@@ -51,12 +51,14 @@ async def make_entry_pipeline(client, rules_mgr, symbol, side):
         entry_price = data["price"]
         quantity = data["quantity"]
         capital = await calculate_capital(entry_price=entry_price, qty=quantity)
+        collateral = LiveUpdateBalances(capital=capital).calculate_collateral()
         completed_record = CompletedLiveOperation(
             operation_id=operation_id,
             strategy="tangent",
             ticker=symbol,
             entry_date=data["timestamp"],
             capital=capital,
+            collateral=collateral,
             quantity=quantity,
             exit_date=data["timestamp"],
             outcome="UNRESOLVED",
@@ -73,6 +75,7 @@ async def make_entry_pipeline(client, rules_mgr, symbol, side):
         partial_record = PartialLiveOperation(
             operation_id=operation_id,
             order_id=order_id,
+            exit_order_id=order_id,
             entry_date=data["timestamp"],
             side=side,
             entry_price=synchronized_orders["price"],
@@ -192,7 +195,7 @@ async def verify_bet_result(msg, client):
                 new_order_id = exit_order_id
                 exit_price = order_data["avgPrice"]
                 partial_update_record = UpdatePartialLiveOPeration(
-                    order_id=new_order_id,
+                    exit_order_id=new_order_id,
                     exit_date=exit_date,
                     exit_price=exit_price,
                     outcome="SL",
@@ -244,7 +247,7 @@ async def verify_bet_result(msg, client):
                 new_order_id = exit_order_id
                 exit_price = order_data["avgPrice"]
                 partial_update_record = UpdatePartialLiveOPeration(
-                    order_id=new_order_id,
+                    exit_order_id=new_order_id,
                     exit_date=exit_date,
                     exit_price=exit_price,
                     outcome="TP",

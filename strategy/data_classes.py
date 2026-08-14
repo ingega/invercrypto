@@ -161,6 +161,7 @@ class CompletedLiveOperation:
     ticker: str
     entry_date: str
     capital: float
+    collateral: float
     quantity: float
     exit_date: str
     outcome: str
@@ -177,6 +178,7 @@ class CompletedLiveOperation:
         self.ticker,
         self.entry_date,
         self.capital,
+        self.collateral,
         self.quantity,
         self.exit_date,
         self.outcome,
@@ -191,6 +193,7 @@ class CompletedLiveOperation:
 class PartialLiveOperation:
     operation_id: int
     order_id: int
+    exit_order_id: int
     entry_date: str
     side: str
     entry_price: float
@@ -211,6 +214,7 @@ class PartialLiveOperation:
         return(
             self.operation_id,
             self.order_id,
+            self.exit_order_id,
             self.entry_date,
             self.side,
             self.entry_price,
@@ -253,7 +257,7 @@ class UpdateCompleteLiveOperation:
 
 @dataclass
 class UpdatePartialLiveOPeration:
-    order_id: int
+    exit_order_id: int
     exit_date: str
     exit_price: float
     outcome: str
@@ -264,7 +268,7 @@ class UpdatePartialLiveOPeration:
 
     def as_tuple(self) -> Tuple:
         return(
-            self.order_id,
+            self.exit_order_id,
             self.exit_date,
             self.exit_price,
             self.outcome,
