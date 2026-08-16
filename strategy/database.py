@@ -2,7 +2,6 @@
 # alpha listed importations
 import sqlite3
 import traceback
-from typing import Tuple
 from data_classes import CompletedOperation, PartialOperation, UpdateCompletedOperation, UpdatePartialOperation
 from data_classes import CompletedLiveOperation, PartialLiveOperation, UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
 from common_files.logger import get_logger
@@ -478,6 +477,26 @@ async def query_capital(operation_id: int) -> float:
         )
         return 0.0
 
+async def query_collateral(operation_id: int) -> float | None:
+    query = """
+    SELECT collateral
+    FROM completed_operations
+    WHERE operation_id = ?
+    """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return row[0]
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE COLLATERAL QUERY FAILURE: {e}"
+        )
+        return None
+
 async def query_algo_id(operation_id: int):
     query = """
         SELECT tp_algo_id, sl_algo_id
@@ -587,6 +606,63 @@ async def calculate_accumulated_loss(
             operation_id,
         )
         return None
+
+async def calculate_total_loss(
+    operation_id: int,
+) -> dict[str, float] | None:
+    """
+    Calculates the accumulated financial results of an operation.
+
+    Returns:
+        A dictionary containing:
+
+        - pnl: Total realized PnL.
+        - gain: Total accumulated gain.
+        - commission: Total commissions.
+        - fee: Total fees.
+
+        Returns None if the database query fails.
+    """
+
+    query = """
+        SELECT
+            COALESCE(SUM(pnl), 0),
+            COALESCE(SUM(gain), 0),
+            COALESCE(SUM(commission), 0),
+            COALESCE(SUM(fee), 0)
+        FROM partial_operations
+        WHERE operation_id = ?
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                query,
+                (operation_id,),
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                return None
+
+            return {
+                "pnl": float(row[0]),
+                "gain": float(row[1]),
+                "commission": float(row[2]),
+                "fee": float(row[3]),
+            }
+
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DATABASE] Failed to calculate total loss "
+            "for operation_id=%s",
+            operation_id,
+        )
+        return None
+
 
 def main():
     from data_classes import UpdatePartialOperation

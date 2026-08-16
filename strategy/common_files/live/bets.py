@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import List
 from database import query_algo_id, query_bet_mode ,query_capital, query_operation_id, query_tickets_in_bet  
 from database import save_live_operation_to_db, save_live_partial_operation_to_db, update_live_complete_operation
-from database import calculate_accumulated_loss, update_live_partial_operation, validate_operation_id
+from database import calculate_accumulated_loss, calculate_total_loss, update_live_partial_operation, validate_operation_id
+from database import query_collateral
 from data_classes import CompletedLiveOperation, PartialLiveOperation, UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
 from common_files.balances import LiveUpdateBalances, update_all_balances
 from common_files.binance_utils.orders import bet_execute, synchronize_orders, GetOrders
@@ -55,11 +56,44 @@ async def calcualte_gain(pnl: float, commission: float, operation_id: int) -> fl
 #                secondary bet results
 #-------------------------------------------------------
 
-async def secondary_final_sl_resolution():
+async def secondary_final_sl_resolution(operation_id: int, symbol:str):
     """
-    Achieve the totals and update the complete_operation record
+    The operation ends with a max sl allowed, the workflow update is:
+    1. Achieve the totals
+    2. update the complete_operation record
+    3. update balances
     """
-    pass
+    # 1. retrieve totals from operation_id query
+    totals = calculate_total_loss(operation_id=operation_id)
+
+    # 2. update the complete_operation_record
+    exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # calculate profit
+    profit = totals["pnl"] - totals["commission"] - totals["fee"]
+    complete_record = UpdateCompleteLiveOperation(
+        exit_date=exit_date,
+        outcome="SL",
+        gain=totals["gain"],
+        pnl=totals["pnl"],
+        commission=totals["commission"],
+        fee=totals["fee"],
+        profit=profit,
+        operation_id=operation_id
+    )
+    await update_live_complete_operation(update_record=complete_record)
+
+    # 3. update balances, retrieve collateral
+    collateral = query_collateral(operation_id=operation_id)
+    capital = collateral + profit
+    update_all_balances(
+        profit=profit,
+        capital=capital,
+        gain=totals["gain"],
+        ticker=symbol,
+        end_operation=True
+    )
+
+    logger.info("✅ [FINAL SL] the pipeline for final SL was executed successfully")
 
 async def secondary_bet_sl_resolution(
         client,
@@ -103,7 +137,7 @@ async def secondary_bet_sl_resolution(
     config = load_json_file(CONFIG_LIVE_FILE)
     max_sl_allowed = config["sl_precentage"]
     if acumm_loss >= max_sl_allowed:
-        await secondary_final_sl_resolution()
+        await secondary_final_sl_resolution(operation_id=operation_id, symbol=symbol)
     else:
         await secondary_bet_flip_resolution(
             client=client,
@@ -115,9 +149,21 @@ async def secondary_bet_sl_resolution(
         )
 
 async def secondary_bet_tp_resolution():
+    """
+    Operation ends with tp, therefore the pipeline exectution is
+    1. Update partial record
+    2. Get totals for gain, profit, etc
+    3. Update completed operation
+    """
     pass
 
 async def secondary_bet_tie_resoultion():
+    """
+    Operation ends because time is finished, therefore the pipeline exectution is
+        1. Update partial record
+        2. Get totals for gain, profit, etc
+        3. Update completed operation
+    """
     pass
 
 async def secondary_bet_flip_resolution(client,

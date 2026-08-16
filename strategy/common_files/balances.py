@@ -252,6 +252,12 @@ class LiveUpdateBalances:
             collateral,
         )
 
+    def restore_collateral(self):
+        """
+        In this case, capital is the collateral returned to the balance
+        """
+        self.update_available_balance()
+
     def update_ticker_balance(self, ticker: str, gain:float):
         """
         update the individual ticker balance
@@ -266,12 +272,14 @@ class LiveUpdateBalances:
         ticker_balance_file = load_json_file(TICKERS_BALANCES_LIVE)
         ticker_balance = ticker_balance_file.get(ticker)
         # get the minimum value for balance
-        minimum_ticker_balance = load_json_file(CONFIG_LIVE_FILE).get("minimum_bet", 0.005)
+        config = load_json_file(CONFIG_LIVE_FILE)
+        minimum_ticker_balance = config.get("minimum_bet", 0.005)
+        loss_protection = config.get("loss_protection", 1)
         if ticker_balance is None:
             logger_live.error(f"❌ [TICKER BALANCE] ticker {ticker} does not exist in {TICKERS_BALANCES_LIVE} file")
             raise ValueError(f"Invalid value: {ticker}")
         actual_balance = ticker_balance["actual_balance"]
-        new_balance = actual_balance + gain
+        new_balance = actual_balance + (gain * loss_protection)
         if new_balance > 1.0:
             new_balance = 1.0
         elif new_balance < minimum_ticker_balance:
@@ -281,9 +289,7 @@ class LiveUpdateBalances:
         logger.info(f"🏛️ [BALANCES] {ticker} balance was succesfully updated from {actual_balance} to {new_balance}")
 
 
-
-
-def update_all_balances(profit: float, capital: float, gain: float, ticker: str):
+def update_all_balances(profit: float, capital: float, gain: float, ticker: str, end_operation=False):
     """
     Every time that an operation complete its cycle, all balances must be updated:
     ---------------------
@@ -313,7 +319,10 @@ def update_all_balances(profit: float, capital: float, gain: float, ticker: str)
 
     # A. get a new instance of LiveUpdateBalance for new calculations
     available_balances = LiveUpdateBalances(capital=capital)
-    collateral = available_balances.calculate_collateral()
+    if end_operation is False:
+        collateral = available_balances.calculate_collateral()
+    else:
+        collateral = available_balances.restore_collateral()
     # B. with collateral calculated, again build a new instance for balances
     updated_available_balances = LiveUpdateBalances(capital=collateral)
     # finally update available balance
