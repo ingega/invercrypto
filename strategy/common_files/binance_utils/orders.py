@@ -863,10 +863,12 @@ async def synchronize_orders(
 
     return output
 
-async def direct_bet_execute(client, 
+async def bet_execute(client, 
                              rules_mgr,
                              symbol: str, 
-                             side: str) -> dict:
+                             side: str,
+                             bet_mode: str = "direct",
+                             adjust:float = 0) -> dict:
     """
     Executes a direct bet (market order with SL and TP) for a given symbol and side.
     :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
@@ -877,7 +879,10 @@ async def direct_bet_execute(client,
 
     # Load configuration
     config = load_json_file(CONFIG_LIVE_FILE)
-    pct_offset = config.get("direct_bet_percentage", 0.005)
+    if bet_mode == "direct":
+        pct_offset = config.get("direct_bet_percentage", 0.005)
+    else:
+        pct_offset = config.get("flip_percentage", 0.005)
 
     # Get notional size and quantity
     notional_size_mgr = NotonialSize(symbol=symbol, client=client)
@@ -898,10 +903,10 @@ async def direct_bet_execute(client,
 
     # Calculate SL and TP based on the side of the trade
     if side.upper() == "BUY":
-        tp_price = current_price * (1.0 + pct_offset)
+        tp_price = current_price * (1.0 + pct_offset + adjust) # only tp could be adjusted
         sl_price = current_price * (1.0 - pct_offset)
     elif side.upper() == "SELL":
-        tp_price = current_price * (1.0 - pct_offset)
+        tp_price = current_price * (1.0 - pct_offset - adjust)
         sl_price = current_price * (1.0 + pct_offset)
     else:
         logger.error(f"Invalid side '{side}' provided. Must be 'BUY' or 'SELL'.")

@@ -499,7 +499,94 @@ async def query_algo_id(operation_id: int):
         )
         return None
 
+async def query_bet_mode(operation_id:int):
+    """
+    This query returns the bet mode of an active ticker
+    :param: ticker(str) Name of the ticker e.g. "BTCUSDT"
+    :return: 
+        a str value, "D" for direct bet mode or "I" for 
+        secondary bet mode (I is for indirect, an older nomenclature)
+    """
+    query = """
+        SELECT bet 
+        FROM partial_operations
+        WHERE outcome = 'UNRESOLVED'
+        AND operation_id = ?
+        """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return row[0]
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE BET_MODE QUERY FAILURE: {e}"
+        )
+        return None
 
+async def validate_operation_id(operation_id: int) -> bool:
+    query = """
+        SELECT * 
+        FROM partial_operations
+        WHERE operation_id = ?
+        """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return False
+            else:
+                return True
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE VALIDATE_OPERATION_ID QUERY FAILURE: {e}"
+        )
+        return False
+
+async def calculate_accumulated_loss(
+    operation_id: int,
+) -> float | None:
+    """
+    Calculates the accumulated loss of an active operation.
+    `gain` is expected to be negative while this function is called.
+    Commission and fees are stored as positive values.
+
+    Example:
+        gain       = -5.00
+        commission =  0.50
+        fee        =  0.10
+
+        accumulated_loss = 5.60
+    The returned value is always positive.
+    """
+    query = """
+        SELECT
+            ABS(COALESCE(SUM(gain), 0))
+            + COALESCE(SUM(commission), 0)
+            + COALESCE(SUM(fee), 0)
+        FROM partial_operations
+        WHERE operation_id = ?
+    """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return float(row[0])
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DATABASE] Failed to calculate accumulated loss "
+            "for operation_id=%s",
+            operation_id,
+        )
+        return None
 
 def main():
     from data_classes import UpdatePartialOperation
