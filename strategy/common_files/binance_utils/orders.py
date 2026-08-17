@@ -8,14 +8,13 @@ import os
 import math
 import time
 from datetime import datetime
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
-from typing import Any, Dict, List
+from decimal import Decimal
+from typing import Any, Dict
 import aiohttp
-from binance import AsyncClient
-from typing import List
+from database import is_ticker_in_bet
 from common_files.logger import get_logger
 from common_files.paths import load_json_file
-from common_files.paths import LIVE_BALANCES, CONFIG_LIVE_FILE, SECONDARY_BETS_LIVE, TICKERS_BALANCES_LIVE
+from common_files.paths import LIVE_BALANCES, CONFIG_LIVE_FILE, TICKERS_BALANCES_LIVE
 
 logger = get_logger(__name__, log_live=True)
 
@@ -36,7 +35,6 @@ class NotonialSize:
     def __init__(self, symbol, client):
         self.available_balance = None
         self.config = {}
-        self.secondary_bets = {}
         self.tickers_balances = {}
         self.symbol = symbol
         self.client = client
@@ -52,8 +50,6 @@ class NotonialSize:
                 self.available_balance = json.load(f).get("available_balance", 0.0)
             with open(CONFIG_LIVE_FILE, 'r') as f:
                 self.config = json.load(f)
-            with open(SECONDARY_BETS_LIVE, 'r') as f:
-                self.secondary_bets = json.load(f)
             with open(TICKERS_BALANCES_LIVE, 'r') as f:
                 self.tickers_balances = json.load(f)
         except Exception as e:
@@ -73,16 +69,12 @@ class NotonialSize:
         :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
         :return: The calculated notional size.
         """
-        print(f"{'=' * 10} start get_notional_size...{'=' * 10}")
         try:
             available_balance = self.available_balance
             size_percentage = self.config.get("size_percentage", 0.07)  # Default to 1% if not set
             leverage = self.config.get("leverage", 3)  # Default to 3x if not set
             ticker_balance = self.tickers_balances.get(self.symbol, 0.0)["actual_balance"]
-            print(f"Calculating notional size for {self.symbol}: main_balance={available_balance}, "
-                  f"size_percentage={size_percentage}, leverage={leverage}, ticker_balance={ticker_balance}")
             notional_size = available_balance * size_percentage * leverage * ticker_balance
-            print(f"notional size is: {notional_size}")
             return notional_size
         except Exception as e:
             logger.error(f"Error calculating notional size for {self.symbol}: {e}")
@@ -99,16 +91,12 @@ class NotonialSize:
         :param notional_size: The notional size for the trade.
         :return: The calculated quantity to trade.
         """
-        print(f"{'=' * 10} start get quantity from notional... {'=' * 10}")
         try:
             # get notional size
             notional_size = await self.get_notional_size()
-            print(f"inside of get qty the notional size is {notional_size}")
             ticker = await self.client.futures_symbol_ticker(symbol=self.symbol)
-            print(f"the value of ticker is {ticker}")
             current_price = float(ticker['price'])
             quantity = notional_size / current_price
-            print(f"values; notional: {notional_size}, current price: {current_price}, qty: {quantity}")
             return quantity
         except Exception as e:
             logger.exception(f"Error calculating quantity from notional for {self.symbol}: {e}")
@@ -686,7 +674,8 @@ class CreateOrderManager:
         self.rules_manager = rules_manager
 
     async def execute_bracket_market_trade(self, symbol: str, side: str, quantity: float, 
-                                     stop_loss_price: float, take_profit_price: float) -> Dict[Any, Any]:
+                                     stop_loss_price: float, take_profit_price: float,
+                                     client) -> Dict[Any, Any]:
         """
         Executes a Market Entry Order and places corresponding SL and TP brackets on Binance Futures.
         If SL or TP placement fails, it performs an emergency rollback by liquidating the position and 
@@ -698,6 +687,52 @@ class CreateOrderManager:
         :param stop_loss_price: Trigger price for Stop Loss
         :param take_profit_price: Trigger price for Take Profit
         """
+        # ------ defensive line, if there's a live operation, execution must be aborted ------- #
+        try:
+            open_orders = await client.futures_get_open_orders(
+                symbol=symbol
+            )
+
+            if open_orders:
+                logger.warning(
+                    "⚠️ [ORDER DEFENSE] Open orders detected for %s. "
+                    "count=%d",
+                    symbol,
+                    len(open_orders),
+                )
+
+                for order in open_orders:
+                    logger.warning(
+                        "⚠️ [OPEN ORDER] symbol=%s | "
+                        "order_id=%s | type=%s | side=%s | status=%s",
+                        symbol,
+                        order.get("orderId"),
+                        order.get("type"),
+                        order.get("side"),
+                        order.get("status"),
+                    )
+
+                raise RuntimeError(
+                    f"Open Binance Futures orders already exist "
+                    f"for {symbol}."
+                )
+
+            logger.debug(
+                "✅ [ORDER DEFENSE] No open orders found for %s.",
+                symbol,
+            )
+
+        except RuntimeError:
+            raise
+
+        except Exception:
+            logger.exception(
+                "❌ [ORDER DEFENSE] Failed to verify open orders "
+                "for symbol=%s",
+                symbol,
+            )
+            raise
+
         # 1. Format inputs against exchange rules
         formatted_qty = self.rules_manager.format_quantity(symbol, quantity)
         formatted_sl = self.rules_manager.format_price(symbol, stop_loss_price)
@@ -864,11 +899,11 @@ async def synchronize_orders(
     return output
 
 async def bet_execute(client, 
-                             rules_mgr,
-                             symbol: str, 
-                             side: str,
-                             bet_mode: str = "direct",
-                             adjust:float = 0) -> dict:
+                    rules_mgr,
+                    symbol: str, 
+                    side: str,
+                    bet_mode: str = "direct",
+                    adjust:float = 0) -> dict:
     """
     Executes a direct bet (market order with SL and TP) for a given symbol and side.
     :param symbol: The trading pair symbol (e.g., 'BTCUSDT').
@@ -884,10 +919,19 @@ async def bet_execute(client,
     else:
         pct_offset = config.get("flip_percentage", 0.005)
 
-    # Get notional size and quantity
-    notional_size_mgr = NotonialSize(symbol=symbol, client=client)
-    raw_quantity = await notional_size_mgr.get_quantity_from_notional()
-    print(f"the value of raw_qty is {raw_quantity}, symbol {symbol}, side: {side}") 
+    # quantity depends if there's actual bet or not
+    active_ticker_bet, quantity =  await is_ticker_in_bet(ticker=symbol)
+    if quantity == 0 and active_ticker_bet:
+        logger.exception("⚠️ [QUANTITY] an error ocurred retrieving the quantity, "
+                         "values: active ticker, %b, quantity: %d", active_ticker_bet, quantity)
+        raise
+
+    if active_ticker_bet:
+        raw_quantity = quantity
+    else:
+        # Get notional size and quantity
+        notional_size_mgr = NotonialSize(symbol=symbol, client=client)
+        raw_quantity = await notional_size_mgr.get_quantity_from_notional()
     logger.debug(
         "Ticker request: symbol=%s | "
         "task=%s | loop=%s | client=%s",
@@ -920,7 +964,8 @@ async def bet_execute(client,
         side=side,
         quantity=raw_quantity,
         stop_loss_price=sl_price,
-        take_profit_price=tp_price
+        take_profit_price=tp_price,
+        client=client
     )
 
     if result.get("status") == "SUCCESS":

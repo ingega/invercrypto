@@ -268,25 +268,29 @@ class LiveUpdateBalances:
             ticker(str) - Name of the ticker e.g. "BTCUSDT"
             gain(float) - gain of the operation e.g. 0.01 or -0.01
         """
-        # open the ticker balance json file
-        ticker_balance_file = load_json_file(TICKERS_BALANCES_LIVE)
-        ticker_balance = ticker_balance_file.get(ticker)
-        # get the minimum value for balance
-        config = load_json_file(CONFIG_LIVE_FILE)
-        minimum_ticker_balance = config.get("minimum_bet", 0.005)
-        loss_protection = config.get("loss_protection", 1)
-        if ticker_balance is None:
-            logger_live.error(f"❌ [TICKER BALANCE] ticker {ticker} does not exist in {TICKERS_BALANCES_LIVE} file")
-            raise ValueError(f"Invalid value: {ticker}")
-        actual_balance = ticker_balance["actual_balance"]
-        new_balance = actual_balance + (gain * loss_protection)
-        if new_balance > 1.0:
-            new_balance = 1.0
-        elif new_balance < minimum_ticker_balance:
-            new_balance = minimum_ticker_balance
-        ticker_balance_file[ticker]["actual_balance"] = new_balance
-        save_json_file(TICKERS_BALANCES_LIVE, ticker_balance_file)
-        logger.info(f"🏛️ [BALANCES] {ticker} balance was succesfully updated from {actual_balance} to {new_balance}")
+        try:
+            # open the ticker balance json file
+            ticker_balance_file = load_json_file(TICKERS_BALANCES_LIVE)
+            ticker_balance = ticker_balance_file[ticker]
+            # get the minimum value for balance
+            config = load_json_file(CONFIG_LIVE_FILE)
+            minimum_ticker_balance = config.get("minimum_bet", 0.005)
+            loss_protection = config.get("loss_protection", 1)
+            if ticker_balance is None:
+                logger_live.error(f"❌ [TICKER BALANCE] ticker {ticker} does not exist in {TICKERS_BALANCES_LIVE} file")
+                raise ValueError(f"Invalid value: {ticker}")
+            actual_balance = ticker_balance["actual_balance"]
+            new_balance = actual_balance + (gain * loss_protection)
+            if new_balance > 1.0:
+                new_balance = 1.0
+            elif new_balance < minimum_ticker_balance:
+                new_balance = minimum_ticker_balance
+            ticker_balance_file[ticker]["actual_balance"] = new_balance
+            save_json_file(TICKERS_BALANCES_LIVE, ticker_balance_file)
+            logger.info(f"🏛️ [BALANCES] {ticker} balance was succesfully updated from {actual_balance} to {new_balance}")
+        except Exception as e:
+            logger.exception("❌ [TICKER BALANCE] an exception ocurred during execution")
+            raise RuntimeError ("update ticker balance fails") from e
 
 
 def update_all_balances(profit: float, capital: float, gain: float, ticker: str, end_operation=False):
@@ -320,13 +324,16 @@ def update_all_balances(profit: float, capital: float, gain: float, ticker: str,
     # A. get a new instance of LiveUpdateBalance for new calculations
     available_balances = LiveUpdateBalances(capital=capital)
     if end_operation is False:
+        # is the init of the operation, collateral must be retailed
         collateral = available_balances.calculate_collateral()
+        # B. with collateral calculated, again build a new instance for balances
+        updated_available_balances = LiveUpdateBalances(capital=collateral)
+        # finally update available balance
+        updated_available_balances.update_available_balance()
     else:
+        # it is the end of the operation, collateral must be restored
         collateral = available_balances.restore_collateral()
-    # B. with collateral calculated, again build a new instance for balances
-    updated_available_balances = LiveUpdateBalances(capital=collateral)
-    # finally update available balance
-    updated_available_balances.update_available_balance()
+    
 
     # 3. update ticker balance 
     # in this case we can use any instance, capital parameter is not used for ticker balance update

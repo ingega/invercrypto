@@ -612,8 +612,6 @@ def verify_live_direct_bet_result():
     2. Iterate searching for 
     """
 
-def verify_live_secondary_bet_result():
-    pass
 
 
 def main():

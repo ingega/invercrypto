@@ -1,11 +1,12 @@
 # invercrypto/strategy/common_files/live/bets.py
 import time
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import List
 from database import query_algo_id, query_bet_mode ,query_capital, query_operation_id, query_tickets_in_bet  
 from database import save_live_operation_to_db, save_live_partial_operation_to_db, update_live_complete_operation
 from database import calculate_accumulated_loss, calculate_total_loss, update_live_partial_operation, validate_operation_id
-from database import query_collateral
+from database import query_collateral, query_operation_id_unresolved, query_ticker_by_op_id, is_operation_expired
 from data_classes import CompletedLiveOperation, PartialLiveOperation, UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
 from common_files.balances import LiveUpdateBalances, update_all_balances
 from common_files.binance_utils.orders import bet_execute, synchronize_orders, GetOrders
@@ -20,7 +21,7 @@ logger = get_logger(__name__, log_live=True)
 #                results functions                     #
 ########################################################
 
-async def calcualte_gain(pnl: float, commission: float, operation_id: int) -> float:
+async def calculate_gain(pnl: float, commission: float, operation_id: int) -> float:
     """
     Calculates net gain for an operation
     -------------------------------------------
@@ -56,44 +57,283 @@ async def calcualte_gain(pnl: float, commission: float, operation_id: int) -> fl
 #                secondary bet results
 #-------------------------------------------------------
 
-async def secondary_final_sl_resolution(operation_id: int, symbol:str):
+class SecondaryFinalResolution:
     """
-    The operation ends with a max sl allowed, the workflow update is:
-    1. Achieve the totals
-    2. update the complete_operation record
-    3. update balances
+    This class use the workflow to update records and ends an operation
+    The 3 possibles scenarios: TP, SL, TIE
+    Once operation ends the workflow update is:
+        1. Achieve the totals
+        2. update the complete_operation record
+        3. update balances
     """
-    # 1. retrieve totals from operation_id query
-    totals = calculate_total_loss(operation_id=operation_id)
+    def __init__(self, operation_id:int, symbol: str, outcome:str) -> None:
+        self.operation_id = operation_id
+        self.symbol = symbol
+        self.outcome = outcome
 
-    # 2. update the complete_operation_record
-    exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # calculate profit
-    profit = totals["pnl"] - totals["commission"] - totals["fee"]
-    complete_record = UpdateCompleteLiveOperation(
-        exit_date=exit_date,
-        outcome="SL",
-        gain=totals["gain"],
-        pnl=totals["pnl"],
-        commission=totals["commission"],
-        fee=totals["fee"],
-        profit=profit,
-        operation_id=operation_id
-    )
-    await update_live_complete_operation(update_record=complete_record)
+    async def close_operation(self):
+        try:
+            # 1. retrieve totals from operation_id query
+            totals = await calculate_total_loss(operation_id=self.operation_id)
+        
+            # 2. update the complete_operation_record
+            exit_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            # calculate profit
+            profit = totals["pnl"] - totals["commission"]
+            complete_record = UpdateCompleteLiveOperation(
+                exit_date=exit_date,
+                outcome=self.outcome,
+                gain=totals["gain"],
+                pnl=totals["pnl"],
+                commission=totals["commission"],
+                fee = 0,
+                profit=profit,
+                operation_id=self.operation_id
+            )
+            await update_live_complete_operation(update_record=complete_record)
+        
+            # 3. update balances, retrieve collateral
+            collateral = await query_collateral(operation_id=self.operation_id)
+            capital = collateral + profit
+            update_all_balances(
+                profit=profit,
+                capital=capital,
+                gain=totals["gain"],
+                ticker=self.symbol,
+                end_operation=True
+            )
+        
+            logger.info("✅ [FINAL OPERATION] the pipeline of %s was executed successfully", self.outcome)
+        except Exception:
+            logger.exception("❌ Secondary final resolution fails")
 
-    # 3. update balances, retrieve collateral
-    collateral = query_collateral(operation_id=operation_id)
-    capital = collateral + profit
-    update_all_balances(
-        profit=profit,
-        capital=capital,
-        gain=totals["gain"],
-        ticker=symbol,
-        end_operation=True
-    )
+@dataclass
+class TieExitResult:
+    exit_date: str
+    exit_price: float
+    pnl: float
+    commission: float
+    exit_order_id: int
 
-    logger.info("✅ [FINAL SL] the pipeline for final SL was executed successfully")
+
+async def close_tie_operation(
+    client,
+    symbol: str,
+) -> TieExitResult:
+    """
+    Force-closes an active Futures position for a TIE operation.
+
+    The position is closed using a reduce-only market order.
+    Any remaining open orders for the symbol are then cancelled.
+
+    Returns Binance execution data required to finalize
+    the operation in the database.
+    """
+
+    try:
+        # ---------------------------------------------------------
+        # 1. Retrieve current position
+        # ---------------------------------------------------------
+        positions = await client.futures_position_information(
+            symbol=symbol,
+        )
+
+        position = next(
+            (
+                item
+                for item in positions
+                if item["symbol"] == symbol
+            ),
+            None,
+        )
+
+        if position is None:
+            raise RuntimeError(
+                f"No position information found for {symbol}"
+            )
+
+        position_amt = float(position["positionAmt"])
+
+        if position_amt == 0:
+            raise RuntimeError(
+                f"No active position to close for {symbol}"
+            )
+
+        # ---------------------------------------------------------
+        # 2. Determine closing side
+        # ---------------------------------------------------------
+        side = "SELL" if position_amt > 0 else "BUY"
+        quantity = abs(position_amt)
+
+        logger.info(
+            "🟨 [TIE] Closing position | "
+            "symbol=%s | side=%s | quantity=%s",
+            symbol,
+            side,
+            quantity,
+        )
+
+        # ---------------------------------------------------------
+        # 3. Close position
+        # ---------------------------------------------------------
+        close_order = await client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="MARKET",
+            quantity=quantity,
+            reduceOnly=True,
+        )
+
+        exit_order_id = close_order["orderId"]
+
+        logger.info(
+            "🟨 [TIE] Close order submitted | "
+            "symbol=%s | order_id=%s",
+            symbol,
+            exit_order_id,
+        )
+
+        # ---------------------------------------------------------
+        # 4. Retrieve final order status
+        # ---------------------------------------------------------
+        order = await client.futures_get_order(
+            symbol=symbol,
+            orderId=exit_order_id,
+        )
+
+        if order["status"] != "FILLED":
+            raise RuntimeError(
+                f"TIE close order was not filled | "
+                f"symbol={symbol} | "
+                f"order_id={exit_order_id} | "
+                f"status={order['status']}"
+            )
+
+        # ---------------------------------------------------------
+        # 5. Cancel orphan SL/TP orders
+        # ---------------------------------------------------------
+        await client.futures_cancel_all_open_orders(
+            symbol=symbol,
+        )
+
+        logger.info(
+            "🟨 [TIE] Orphan orders cancelled | symbol=%s",
+            symbol,
+        )
+
+        # ---------------------------------------------------------
+        # 6. Retrieve executions
+        # ---------------------------------------------------------
+        trades = await client.futures_account_trades(
+            symbol=symbol,
+        )
+
+        exit_trades = [
+            trade
+            for trade in trades
+            if int(trade["orderId"]) == int(exit_order_id)
+        ]
+
+        if not exit_trades:
+            raise RuntimeError(
+                f"No trade execution found for TIE order | "
+                f"symbol={symbol} | "
+                f"order_id={exit_order_id}"
+            )
+
+        # ---------------------------------------------------------
+        # 7. Aggregate execution data
+        # ---------------------------------------------------------
+        total_qty = sum(
+            float(trade["qty"])
+            for trade in exit_trades
+        )
+
+        pnl = sum(
+            float(trade["realizedPnl"])
+            for trade in exit_trades
+        )
+
+        commission = sum(
+            float(trade["commission"])
+            for trade in exit_trades
+        )
+
+        exit_price = (
+            sum(
+                float(trade["price"]) * float(trade["qty"])
+                for trade in exit_trades
+            )
+            / total_qty
+        )
+
+        # ---------------------------------------------------------
+        # 8. Use Binance execution timestamp
+        # ---------------------------------------------------------
+        exit_timestamp = max(
+            int(trade["time"])
+            for trade in exit_trades
+        )
+
+        exit_date = datetime.fromtimestamp(
+            exit_timestamp / 1000,
+            tz=timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S")
+
+        logger.info(
+            "🟨 [TIE RESULT] symbol=%s | "
+            "order_id=%s | "
+            "exit_price=%.8f | "
+            "pnl=%.8f | "
+            "commission=%.8f",
+            symbol,
+            exit_order_id,
+            exit_price,
+            pnl,
+            commission,
+        )
+
+        return TieExitResult(
+            exit_date=exit_date,
+            exit_price=exit_price,
+            pnl=pnl,
+            commission=commission,
+            exit_order_id=exit_order_id,
+        )
+
+    except Exception as e:
+        logger.exception(
+            "❌ [TIE] Failed to close TIE operation | symbol=%s",
+            symbol,
+        )
+        raise RuntimeError(
+            f"Failed to close TIE operation for {symbol}"
+        ) from e
+
+async def update_tie_operation(operation_id: int, update_record: TieExitResult):
+    """
+    With the information provided, this method updates the partial record
+    """
+    try:
+        # calculate gain
+        gain = await calculate_gain(pnl=update_record.pnl, 
+                                    commission=update_record.commission, 
+                                    operation_id=operation_id)
+        partial_record = UpdatePartialLiveOPeration(
+            exit_order_id=update_record.exit_order_id,
+            exit_date=update_record.exit_date,
+            exit_price=update_record.exit_price,
+            outcome="TIE",
+            gain=gain,
+            pnl=update_record.pnl,
+            commission=update_record.commission,
+            operation_id=operation_id
+        )
+        await update_live_partial_operation(update_record=partial_record)
+        logger.info("✅ [UPDATE TIE OPERATION] pipeline was executed successfully")
+    except Exception as e:
+        logger.exception("❌ [UPDATE TIE OPERATION] pileline fails")
+        raise RuntimeError("pileline fails in runtime") from e
 
 async def secondary_bet_sl_resolution(
         client,
@@ -117,7 +357,7 @@ async def secondary_bet_sl_resolution(
             call flip resolution
     """ 
     # 1. update partial record
-    exit_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    exit_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     logger.info(f"[UPDATE PARTIAL OP] values: exit_order_id: {exit_order_id} | exit date: {exit_date}"
                 f" | exit_price: {exit_price:.6f} | outcome: SL | gain: {gain:.6f} | pnl: {pnl: .3f} |"
                 f" commission: {commission:.6f} | operation_id: {operation_id}")
@@ -137,7 +377,8 @@ async def secondary_bet_sl_resolution(
     config = load_json_file(CONFIG_LIVE_FILE)
     max_sl_allowed = config["sl_precentage"]
     if acumm_loss >= max_sl_allowed:
-        await secondary_final_sl_resolution(operation_id=operation_id, symbol=symbol)
+        final_sl = SecondaryFinalResolution(operation_id=operation_id, symbol=symbol, outcome="SL")
+        await final_sl.close_operation()
     else:
         await secondary_bet_flip_resolution(
             client=client,
@@ -147,24 +388,6 @@ async def secondary_bet_sl_resolution(
             adjust=acumm_loss,
             operation_id=operation_id
         )
-
-async def secondary_bet_tp_resolution():
-    """
-    Operation ends with tp, therefore the pipeline exectution is
-    1. Update partial record
-    2. Get totals for gain, profit, etc
-    3. Update completed operation
-    """
-    pass
-
-async def secondary_bet_tie_resoultion():
-    """
-    Operation ends because time is finished, therefore the pipeline exectution is
-        1. Update partial record
-        2. Get totals for gain, profit, etc
-        3. Update completed operation
-    """
-    pass
 
 async def secondary_bet_flip_resolution(client,
                                         rules_mgr,
@@ -187,6 +410,36 @@ async def secondary_bet_flip_resolution(client,
         logger.info("✅ [FLIP] flip routine was executed successfully")
     except Exception:
         logger.exception("❌ [FLIP] secondary bet flip function fails")
+
+async def bet_time_expiration(operation_id: int) -> bool:
+    """
+    Function verify if an operation in secondary is in timeout
+    returns a bool var with the result of the query
+    function need the ammount if time for expiration
+    """
+    # get minutes for expiring
+    minutes_allowed = load_json_file(CONFIG_LIVE_FILE).get("stop_bet_minutes", 1440)
+    # returns true or false
+    return await is_operation_expired(operation_id=operation_id, minutes_for_expiration=minutes_allowed)
+
+async def bet_time_expiration_handler(client):
+    unresolved_operation_id = await query_operation_id_unresolved()
+    if unresolved_operation_id is not None:
+        for operation in unresolved_operation_id:
+            result = await bet_time_expiration(operation_id=operation)
+            if result:
+                # retrieve symbol
+                symbol = await query_ticker_by_op_id(operation_id=operation)
+                if symbol is not None:
+                    result = await bet_time_expiration(operation_id=operation)
+                    if result:
+                        # first update the partial record
+                        result = await close_tie_operation(client=client, symbol=symbol)
+                        await update_tie_operation(operation_id=operation, update_record=result)
+                        # finally update and close operation
+                        operation_finished = SecondaryFinalResolution(operation_id=operation, symbol=symbol, outcome="TIE")
+                        await operation_finished.close_operation()
+
 
 # ------------------------------------------------------
 #                direct bet results
@@ -239,6 +492,7 @@ async def direct_bet_sl_routine(
         return
     pnl = float(order_data["realized_pnl"])
     commission = float(order_data["commission"])
+    # BEWARE! the exit_order, is the loss order, therefore there's no need to flip
     side = order_data["side"]
     # ------------------------------------------------------------------
     # 2. Calculate financial results
@@ -288,12 +542,14 @@ async def direct_bet_sl_routine(
     # ------------------------------------------------------------------
     # 4. Add a new partial record
     # ------------------------------------------------------------------
-    # for a secondary bet, the side must flip
-    flip_side = "SELL" if side == "BUY" else "SELL"
+    # The side is already in the correct direction
+    logger.info("[DIRECT SL PIPELINE] the information retrieved for make entry pipeline is"
+                "symbol=%s | side=%s | adjust=%.6f | opertion_id=%d",
+                symbol, side, adjust, operation_id)
     await make_entry_pipeline(client=client,
                         rules_mgr=rules_mgr,
                         symbol=symbol,
-                        side=flip_side,
+                        side=side,
                         bet_mode="secondary",
                         adjust=adjust,
                         oper_id=operation_id)
@@ -530,7 +786,7 @@ async def verify_bet_result(msg, client, rules_mgr):
     capital = await query_capital(
         operation_id=operation_id
     )
-    exit_date = datetime.now().strftime(
+    exit_date = datetime.now(timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
@@ -561,7 +817,7 @@ async def verify_bet_result(msg, client, rules_mgr):
             )
             return
         elif bet_mode == "I":
-            gain = await calcualte_gain(pnl=realized_pnl, commission=commission, operation_id=operation_id)
+            gain = await calculate_gain(pnl=realized_pnl, commission=commission, operation_id=operation_id)
             await secondary_bet_sl_resolution(
                 client=client,
                 rules_mgr=rules_mgr,
@@ -574,6 +830,7 @@ async def verify_bet_result(msg, client, rules_mgr):
                 commission=commission,
                 operation_id=operation_id
             )
+            return
     # ------------------------------------------------------------------
     # Dispatch TP
     # ------------------------------------------------------------------
@@ -590,7 +847,9 @@ async def verify_bet_result(msg, client, rules_mgr):
             )
             return
         elif bet_mode == "I":
-            await secondary_bet_tp_resolution()
+            tp_outcome = SecondaryFinalResolution(operation_id=operation_id, symbol=symbol, outcome="ITP")
+            await tp_outcome.close_operation()
+            return
         else:
             logger.error(f"❌ [BET MODE] an unreconigzed value was returned for the query: {bet_mode}")
     # ------------------------------------------------------------------
@@ -599,7 +858,7 @@ async def verify_bet_result(msg, client, rules_mgr):
     logger.warning(
         "⚠️ [TYPE MISMATCH] Filled order does not match "
         "stored TP/SL algo IDs | "
-        "symbol=%s | strategy_id=%s | "
+        "symbol=%s | algo_id=%s | "
         "tp_algo_id=%s | sl_algo_id=%s | "
         "exit_order_id=%s",
         symbol,

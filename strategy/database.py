@@ -304,34 +304,125 @@ async def save_live_operation_to_db(live_operation: CompletedLiveOperation) -> i
     except sqlite3.Error as e:
        logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
 
-async def save_live_partial_operation_to_db(partial_live_operation: PartialLiveOperation) -> int | None:
+async def save_live_partial_operation_to_db(
+    partial_live_operation: PartialLiveOperation,
+) -> int | None:
     """
-    Safely records a resolved partial bet into the SQLite data layer.
+    Safely insert a partial operation.
+
+    Before inserting, validates that the parent
+    completed operation:
+
+        1. Exists.
+        2. Is still UNRESOLVED.
+
+    This prevents orphaned UNRESOLVED partial operations
+    from being created after the parent operation has already
+    been resolved.
     """
-    query = """
+
+    validate_query = """
+        SELECT 1
+        FROM completed_operations
+        WHERE operation_id = ?
+          AND outcome = 'UNRESOLVED';
+    """
+
+    insert_query = """
         INSERT INTO partial_operations (
-            operation_id, order_id, exit_order_id, entry_date, side, entry_price, type, tp, sl, tp_algo_id, sl_algo_id, exit_date, exit_price,
-            outcome, gain, pnl, commission, bet
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-    """ 
+            operation_id,
+            order_id,
+            exit_order_id,
+            entry_date,
+            side,
+            entry_price,
+            type,
+            tp,
+            sl,
+            tp_algo_id,
+            sl_algo_id,
+            exit_date,
+            exit_price,
+            outcome,
+            gain,
+            pnl,
+            commission,
+            bet
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """
+
     try:
         with sqlite3.connect(DB_LIVE_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute(query, partial_live_operation.as_tuple())
+
+            # ---------------------------------------------------------
+            # 1. Validate parent operation
+            # ---------------------------------------------------------
+
+            cursor.execute(
+                validate_query,
+                (partial_live_operation.operation_id,),
+            )
+
+            parent = cursor.fetchone()
+
+            if parent is None:
+                logger_live.error(
+                    "❌ [DB DEFENSE] Cannot insert partial operation. "
+                    "Parent operation_id=%s does not exist or is "
+                    "already resolved.",
+                    partial_live_operation.operation_id,
+                )
+
+                raise RuntimeError(
+                    "Cannot insert partial operation: "
+                    "parent operation is not unresolved."
+                )
+
+            # ---------------------------------------------------------
+            # 2. Insert partial operation
+            # ---------------------------------------------------------
+
+            cursor.execute(
+                insert_query,
+                partial_live_operation.as_tuple(),
+            )
+
             conn.commit()
-            # prepare data for logger
-            data_exit = {
-                "operation_id": partial_live_operation.operation_id,
-                "order_id": partial_live_operation.order_id,
-                "side": partial_live_operation.side,
-                "outcome": partial_live_operation.outcome,
-                "gain": partial_live_operation.gain
-            }
-            logger_live.info(f"🟢 [DB] record for {partial_live_operation.operation_id} added to partial_operations" 
-                        f" table with values: {data_exit} ")
+
+            # ---------------------------------------------------------
+            # 3. Logging
+            # ---------------------------------------------------------
+
+            logger_live.info(
+                "🟢 [DB] Partial operation inserted. "
+                "operation_id=%s | order_id=%s | side=%s | "
+                "outcome=%s | gain=%+.6f",
+                partial_live_operation.operation_id,
+                partial_live_operation.order_id,
+                partial_live_operation.side,
+                partial_live_operation.outcome,
+                partial_live_operation.gain,
+            )
+
             return cursor.lastrowid
-    except sqlite3.Error as e:
-       logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}")
+
+    except sqlite3.IntegrityError:
+        logger_live.exception(
+            "❌ [DB] Integrity violation inserting partial operation. "
+            "operation_id=%s",
+            partial_live_operation.operation_id,
+        )
+        raise
+
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DB] Failed to insert partial operation. "
+            "operation_id=%s",
+            partial_live_operation.operation_id,
+        )
+        raise
 
 ##################### UPDATE FUNCTIONS  ######################
 
@@ -411,23 +502,7 @@ async def update_live_partial_operation(
 
 ##################### QUERY FUNCTIONS  #####################
 
-async def query_tickets_in_bet():
-    """
-    Verify if a ticker is in a bet
-    """
-    query = """ 
-    SELECT ticker FROM completed_operations 
-    WHERE outcome = 'UNRESOLVED';
-    """
-    try:
-        with sqlite3.connect(DB_LIVE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute(query)
-            # return all tickers in bet
-            return cursor.fetchall()
-            
-    except sqlite3.Error as e:
-           logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}") 
+# --------- operation_id, order_id, any id ------------------------#
 
 async def query_operation_id(
     ticker: str,
@@ -456,6 +531,75 @@ async def query_operation_id(
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
         )
         return None
+
+async def query_algo_id(operation_id: int):
+    query = """
+        SELECT tp_algo_id, sl_algo_id
+        FROM partial_operations
+        WHERE operation_id = ?
+        AND outcome = 'UNRESOLVED';
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return row
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE ALGO_ID QUERY FAILURE: {e}"
+        )
+        return None
+
+async def validate_operation_id(operation_id: int) -> bool:
+    query = """
+        SELECT * 
+        FROM partial_operations
+        WHERE operation_id = ?
+        """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return False
+            else:
+                return True
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE VALIDATE_OPERATION_ID QUERY FAILURE: {e}"
+        )
+        return False
+
+async def query_operation_id_unresolved():
+    """
+    Retunrs all operations id unresolved
+    """
+    query = """
+            SELECT operation_id 
+            FROM completed_operations
+            WHERE outcome = 'UNRESOLVED';
+            """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            
+            return row
+
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DATABASE] Failed to query unresolved operations")
+        return None
+
+# --------------- financial queries ------------------------------- #
 
 async def query_capital(operation_id: int) -> float:
     query = """
@@ -496,76 +640,6 @@ async def query_collateral(operation_id: int) -> float | None:
             f"❌ DATABASE COLLATERAL QUERY FAILURE: {e}"
         )
         return None
-
-async def query_algo_id(operation_id: int):
-    query = """
-        SELECT tp_algo_id, sl_algo_id
-        FROM partial_operations
-        WHERE operation_id = ?
-    """
-
-    try:
-        with sqlite3.connect(DB_LIVE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (operation_id,))
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return row
-    except sqlite3.Error as e:
-        logger_live.error(
-            f"❌ DATABASE ALGO_ID QUERY FAILURE: {e}"
-        )
-        return None
-
-async def query_bet_mode(operation_id:int):
-    """
-    This query returns the bet mode of an active ticker
-    :param: ticker(str) Name of the ticker e.g. "BTCUSDT"
-    :return: 
-        a str value, "D" for direct bet mode or "I" for 
-        secondary bet mode (I is for indirect, an older nomenclature)
-    """
-    query = """
-        SELECT bet 
-        FROM partial_operations
-        WHERE outcome = 'UNRESOLVED'
-        AND operation_id = ?
-        """
-    try:
-        with sqlite3.connect(DB_LIVE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (operation_id,))
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return row[0]
-    except sqlite3.Error as e:
-        logger_live.error(
-            f"❌ DATABASE BET_MODE QUERY FAILURE: {e}"
-        )
-        return None
-
-async def validate_operation_id(operation_id: int) -> bool:
-    query = """
-        SELECT * 
-        FROM partial_operations
-        WHERE operation_id = ?
-        """
-    try:
-        with sqlite3.connect(DB_LIVE_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (operation_id,))
-            row = cursor.fetchone()
-            if row is None:
-                return False
-            else:
-                return True
-    except sqlite3.Error as e:
-        logger_live.error(
-            f"❌ DATABASE VALIDATE_OPERATION_ID QUERY FAILURE: {e}"
-        )
-        return False
 
 async def calculate_accumulated_loss(
     operation_id: int,
@@ -628,8 +702,7 @@ async def calculate_total_loss(
         SELECT
             COALESCE(SUM(pnl), 0),
             COALESCE(SUM(gain), 0),
-            COALESCE(SUM(commission), 0),
-            COALESCE(SUM(fee), 0)
+            COALESCE(SUM(commission), 0)
         FROM partial_operations
         WHERE operation_id = ?
     """
@@ -651,8 +724,7 @@ async def calculate_total_loss(
             return {
                 "pnl": float(row[0]),
                 "gain": float(row[1]),
-                "commission": float(row[2]),
-                "fee": float(row[3]),
+                "commission": float(row[2])
             }
 
     except sqlite3.Error:
@@ -662,6 +734,181 @@ async def calculate_total_loss(
             operation_id,
         )
         return None
+
+
+# ---------- ticker releated ----------------------------#
+
+async def query_tickets_in_bet():
+    """
+    Verify if a ticker is in a bet
+    """
+    query = """ 
+    SELECT ticker FROM completed_operations 
+    WHERE outcome = 'UNRESOLVED';
+    """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            # return all tickers in bet
+            return cursor.fetchall()
+            
+    except sqlite3.Error as e:
+           logger_live.error(f"❌ DATABASE COMP INSERTION FAILURE: {str(e)}") 
+
+async def query_ticker_by_op_id(
+    operation_id: int,
+) -> str | None:
+    """
+    Return the ticker associated with an operation_id.
+    """
+    query = """
+        SELECT ticker
+        FROM completed_operations
+        WHERE operation_id = ?;
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+
+            row = cursor.fetchone()
+
+            if row is None:
+                return None
+
+            return row[0]
+
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DATABASE] Failed to retrieve ticker "
+            "for operation_id=%s",
+            operation_id,
+        )
+        return None
+
+
+# ---------- time expired aux queries --------------------#
+
+async def is_operation_expired(
+    operation_id: int,
+    minutes_for_expiration: int,
+) -> bool:
+    """
+    Determine whether the secondary stage of an operation
+    has exceeded its configured expiration time.
+
+    The expiration clock starts at the exit_date of the
+    direct bet (bet='D', outcome='SL').
+
+    The operation is expired only when:
+        1. The direct bet has been resolved by SL.
+        2. An UNRESOLVED row still exists for the operation.
+        3. The configured expiration time has elapsed.
+    """
+
+    query = """
+        SELECT EXISTS (
+            SELECT 1
+            FROM partial_operations AS direct
+            WHERE direct.operation_id = ?
+              AND direct.bet = 'D'
+              AND direct.outcome = 'SL'
+              AND datetime(
+                    direct.exit_date,
+                    '+' || ? || ' minutes'
+                  ) <= datetime('now')
+              AND EXISTS (
+                  SELECT 1
+                  FROM partial_operations AS unresolved
+                  WHERE unresolved.operation_id = direct.operation_id
+                    AND unresolved.outcome = 'UNRESOLVED'
+              )
+        );
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                query,
+                (
+                    operation_id,
+                    minutes_for_expiration,
+                ),
+            )
+
+            row = cursor.fetchone()
+
+            return bool(row[0]) if row is not None else False
+
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DATABASE] Failed to check expiration "
+            "for operation_id=%s",
+            operation_id,
+        )
+        return False
+
+# ---------------- bets   --------------------------------#
+
+async def query_bet_mode(operation_id:int):
+    """
+    This query returns the bet mode of an active ticker
+    :param: ticker(str) Name of the ticker e.g. "BTCUSDT"
+    :return: 
+        a str value, "D" for direct bet mode or "I" for 
+        secondary bet mode (I is for indirect, an older nomenclature)
+    """
+    query = """
+        SELECT bet 
+        FROM partial_operations
+        WHERE outcome = 'UNRESOLVED'
+        AND operation_id = ?
+        """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return row[0]
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE BET_MODE QUERY FAILURE: {e}"
+        )
+        return None
+
+async def is_ticker_in_bet(ticker:str) -> tuple[bool, float]:
+    """
+    This query returns a bool value if depends if a ticker is on an unresolved bet
+    :param: symbol(str) Name of the ticker e.g. "BTCUSDT"
+    :return: 
+        a boolean value, True if there's an active bet for this symbol, otherwise False 
+        also the quantity in bet
+    """
+    query = """
+        SELECT quantity
+        FROM completed_operations
+        WHERE ticker = ?
+        AND outcome = 'UNRESOLVED'
+        """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (ticker,))
+            row = cursor.fetchone() 
+            if row is None:
+                return False, 0.0
+            return True, row[0]
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE BET_MODE QUERY FAILURE: {e}"
+        )
+        return False, 0.0
 
 
 def main():

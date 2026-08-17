@@ -2,7 +2,7 @@ import asyncio
 import os
 from binance import AsyncClient, BinanceSocketManager
 from common_files.binance_utils.orders import SymbolRulesManager
-from common_files.live.bets import entries_pipeline, verify_bet_result
+from common_files.live.bets import entries_pipeline, verify_bet_result, bet_time_expiration_handler
 from common_files.logger import get_logger
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
 from utils.timing import wait_for_time_trigger
@@ -120,6 +120,28 @@ async def user_stream_supervisor(client, rules_mgr):
 
             await asyncio.sleep(5)
 
+async def time_expiration_monitor(client):
+    """
+    Continuously monitors unresolved operations and closes
+    operations that exceed the configured maximum lifetime.
+    """
+    while True:
+        try:
+            await bet_time_expiration_handler(client=client)
+
+        except asyncio.CancelledError:
+            logger.info(
+                "Time expiration monitor cancelled."
+            )
+            raise
+
+        except Exception:
+            logger.exception(
+                "❌ Time expiration monitor failed."
+            )
+
+        await asyncio.sleep(5)
+
 async def main():
 
     config = load_json_file(CONFIG_LIVE_FILE)
@@ -168,7 +190,7 @@ async def main():
                 await asyncio.sleep(5)
 
         # ---------------------------------------------------------
-        # Start Binance user stream
+        # Independent Background process
         # ---------------------------------------------------------
 
         user_stream_task = asyncio.create_task(
@@ -178,6 +200,11 @@ async def main():
             ),
             name="binance-user-stream",
         )
+
+        expiration_task = asyncio.create_task(
+        time_expiration_monitor(client=client),
+        name="time-expiration-monitor",
+    )
 
         # ---------------------------------------------------------
         # Main execution loop
