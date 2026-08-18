@@ -28,11 +28,14 @@ def init_operations_db() -> None:
         cursor = conn.cursor()
         # Enable Write-Ahead Logging for high-frequency concurrency updates
         cursor.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA foreign_keys = ON")
+
 
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         # Enable Write-Ahead Logging for high-frequency concurrency updates
         cursor.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA foreign_keys = ON")
         
 def save_operation_to_db(operation: CompletedOperation) -> int | None:
     """
@@ -480,7 +483,8 @@ async def update_live_partial_operation(
             gain = ?,
             pnl = ?,
             commission = ?
-        WHERE operation_id = ?;
+        WHERE operation_id = ?
+        AND outcome = 'UNRESOLVED';
     """
     try:
         with sqlite3.connect(DB_LIVE_PATH) as conn:
@@ -489,6 +493,15 @@ async def update_live_partial_operation(
                 query,
                 update_record.as_tuple(),
             )
+
+            # defensive layer, only one row must be updated
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"Expected exactly one unresolved partial operation "
+                    f"for operation_id={UpdatePartialLiveOPeration.operation_id}, "
+                    f"updated={cursor.rowcount}"
+                )
+
             conn.commit()
             logger_live.info(f"🟢 [DB] Partial operation {update_record.operation_id} was updated susccessfully")
             return cursor.rowcount == 1
@@ -661,7 +674,6 @@ async def calculate_accumulated_loss(
         SELECT
             ABS(COALESCE(SUM(gain), 0))
             + COALESCE(SUM(commission), 0)
-            + COALESCE(SUM(fee), 0)
         FROM partial_operations
         WHERE operation_id = ?
     """
@@ -909,6 +921,63 @@ async def is_ticker_in_bet(ticker:str) -> tuple[bool, float]:
             f"❌ DATABASE BET_MODE QUERY FAILURE: {e}"
         )
         return False, 0.0
+
+
+# ------------------- conciliation data ------------------------#
+
+async def query_unresolved_operations() -> list[dict]:
+    """
+    Returns all operations that are still marked as UNRESOLVED.
+
+    The result contains both the completed-operation information
+    and the unresolved partial-operation information required for
+    startup reconciliation.
+    """
+
+    query = """
+        SELECT
+            c.operation_id,
+            c.ticker,
+            c.outcome AS operation_outcome,
+
+            p.id AS partial_id,
+            p.order_id,
+            p.exit_order_id,
+            p.entry_date,
+            p.exit_date,
+            p.side,
+            p.tp,
+            p.sl,
+            p.tp_algo_id,
+            p.sl_algo_id,
+            p.bet,
+            p.outcome AS partial_outcome
+
+        FROM completed_operations AS c
+
+        INNER JOIN partial_operations AS p
+            ON p.operation_id = c.operation_id
+
+        WHERE c.outcome = 'UNRESOLVED'
+          AND p.outcome = 'UNRESOLVED';
+    """
+
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+
+            cursor = conn.cursor()
+            cursor.execute(query)
+
+            rows = cursor.fetchall()
+
+            return [dict(row) for row in rows]
+
+    except sqlite3.Error:
+        logger_live.exception(
+            "❌ [DATABASE] Failed to retrieve unresolved operations"
+        )
+        raise
 
 
 def main():

@@ -5,7 +5,7 @@ from common_files.paths import *
 
 logger = get_logger(__name__)
 
-# provide a different _name__ for mapping correctly
+# provide a different _name_ for correct mapping
 logger_live = get_logger(
     f"{__name__}.live", # e.g. balance.live
     log_live=True,
@@ -287,9 +287,9 @@ class LiveUpdateBalances:
                 new_balance = minimum_ticker_balance
             ticker_balance_file[ticker]["actual_balance"] = new_balance
             save_json_file(TICKERS_BALANCES_LIVE, ticker_balance_file)
-            logger.info(f"🏛️ [BALANCES] {ticker} balance was succesfully updated from {actual_balance} to {new_balance}")
+            logger_live.info(f"🏛️ [BALANCES] {ticker} balance was succesfully updated from {actual_balance} to {new_balance}")
         except Exception as e:
-            logger.exception("❌ [TICKER BALANCE] an exception ocurred during execution")
+            logger_live.exception("❌ [TICKER BALANCE] an exception ocurred during execution")
             raise RuntimeError ("update ticker balance fails") from e
 
 

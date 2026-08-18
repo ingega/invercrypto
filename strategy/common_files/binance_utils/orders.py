@@ -4,10 +4,9 @@ This module contains classes and functions to manage orders in binance futures
 """
 import asyncio
 import json
-import os
 import math
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict
 import aiohttp
@@ -17,7 +16,6 @@ from common_files.paths import load_json_file
 from common_files.paths import LIVE_BALANCES, CONFIG_LIVE_FILE, TICKERS_BALANCES_LIVE
 
 logger = get_logger(__name__, log_live=True)
-
 
 
 # ====================================================#
@@ -737,8 +735,6 @@ class CreateOrderManager:
         formatted_qty = self.rules_manager.format_quantity(symbol, quantity)
         formatted_sl = self.rules_manager.format_price(symbol, stop_loss_price)
         formatted_tp = self.rules_manager.format_price(symbol, take_profit_price)
-
-        print(f"value of params; formatted_qty: {formatted_qty}, formated_sl: {formatted_sl}, formated tp: {formatted_tp}")
         
         # Determine opposite side for exit orders
         exit_side = 'SELL' if side == 'BUY' else 'BUY'
@@ -755,7 +751,7 @@ class CreateOrderManager:
             )
             # create dict with orderId, side, price, quantity and timestamp
             update_time = market_order.get("updateTime")
-            timestamp = datetime.fromtimestamp(update_time / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            timestamp = datetime.fromtimestamp(update_time / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
             update_time = None # avoids overwriting values for sl and tp orders
 
             market_order_data = {

@@ -21,7 +21,7 @@ logger = get_logger(__name__, log_live=True)
 #                results functions                     #
 ########################################################
 
-async def calculate_gain(pnl: float, commission: float, operation_id: int) -> float:
+async def calculate_gain(pnl: float, commission: float, operation_id: int) -> float | None:
     """
     Calculates net gain for an operation
     -------------------------------------------
@@ -375,7 +375,7 @@ async def secondary_bet_sl_resolution(
     # ---------- once updated, calculate the acummulated loss -------- #
     acumm_loss = await calculate_accumulated_loss(operation_id=operation_id)
     config = load_json_file(CONFIG_LIVE_FILE)
-    max_sl_allowed = config["sl_precentage"]
+    max_sl_allowed = config["sl_percentage"]
     if acumm_loss >= max_sl_allowed:
         final_sl = SecondaryFinalResolution(operation_id=operation_id, symbol=symbol, outcome="SL")
         await final_sl.close_operation()
@@ -704,9 +704,9 @@ async def verify_bet_result(msg, client, rules_mgr):
     algo_id = event_data.get("si")
     exit_order_id = event_data.get("i")
     side = event_data.get("S")
-    avg_price = event_data.get("ap")
-    realized_pnl = event_data.get("rp")
-    commission = event_data.get("n")
+    avg_price = float(event_data.get("ap"))
+    realized_pnl = float(event_data.get("rp"))
+    commission = float(event_data.get("n"))
     
     # ------------------------------------------------------------------
     # We only care about FILLED orders.

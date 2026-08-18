@@ -13,6 +13,12 @@ client = Client()
 # logger
 logger = get_logger(__name__)
 
+# provide a different _name_ for correct mapping
+logger_live = get_logger(
+    f"{__name__}.live", # e.g. balance.live
+    log_live=True,
+)
+
 def get_bars(ticker:str, bars:int, interval:str) -> dict:
     """
     This functions retrives the bars information from binance futures
@@ -25,7 +31,10 @@ def get_bars(ticker:str, bars:int, interval:str) -> dict:
                 interval=interval, 
                 limit=bars)
         except:
-            logger.exception("klines could not retrieved from binance side")
+            if logger_live.name.endswith(".live"):
+                logger_live.exception("klines could not retrieved from binance side")
+            else:    
+                logger.exception("klines could not retrieved from binance side")
             attempts += 1
             if attempts >= 10:
                 return {}
@@ -52,7 +61,10 @@ def get_actual_prices(ticker:str, interval: str) -> dict:
                 }
             }
         except:
-            logger.exception(f"klines for {ticker} could not retrieved from binance side")
+            if logger_live.name.endswith(".live"):
+                logger_live.exception(f"klines for {ticker} could not retrieved from binance side")    
+            else:
+                logger.exception(f"klines for {ticker} could not retrieved from binance side")
             attempts += 1
             if attempts >= 10:
                 return {}
