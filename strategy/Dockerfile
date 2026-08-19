@@ -20,4 +20,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY strategy/ ./strategy/
 
 # Adjusted the command to point to your main file correctly
-CMD ["python", "strategy/tangent/main.py"]
+CMD ["python", "strategy/tangent/main_live.py"]
