@@ -144,7 +144,17 @@ async def time_expiration_monitor(client):
 
 async def main():
 
+    # defensive load file 
+    logger.info(f"📂 Loading live config from path: {CONFIG_LIVE_FILE}")
     config = load_json_file(CONFIG_LIVE_FILE)
+
+    if not config:
+        logger.error(
+            f"❌ Config file at {CONFIG_LIVE_FILE} is EMPTY or missing!"
+        )
+        raise FileNotFoundError(f"Configuration file empty at {CONFIG_LIVE_FILE}")
+
+    logger.info(f"✅ Config keys loaded successfully: {list(config.keys())}")
 
     target_hour = config["target_hours"]
     target_minute = config["target_minutes"]

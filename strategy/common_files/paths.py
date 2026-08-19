@@ -14,8 +14,13 @@ load_dotenv(PROJECT_ROOT / ".env")
 # project root path
 DATA_PATH = Path(os.environ["DATA_PATH"])
 
-# data dir changes if 
+# Main data dir
 DATA_DIR = DATA_PATH
+
+######################################################
+#           Simulator data maps                      #
+######################################################
+
 # data folders
 CONFIG_DIR = DATA_DIR / "config"
 STATE_DIR = DATA_DIR / "state"
