@@ -7,17 +7,21 @@ WORKDIR /app
 
 # Set environment variables to optimize Python inside Docker
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=
-ENV PYTHONPATH=/app/strategy
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
-# Copy requirements matrix
-COPY strategy/requirements.txt .
+# Install Poetry and configure it to install system-wide
+RUN pip install --no-cache-dir poetry \
+    && poetry config virtualenvs.create false
 
-# Install pre-compiled wheels directly (no compilation needed, no OOM)
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy Poetry manifest and lockfile from strategy root
+COPY pyproject.toml poetry.lock* ./
 
-# Copy the rest of your invercrypto 2.0 application code
-COPY strategy/ ./strategy/
+# Install production dependencies directly
+RUN poetry install --no-root --only main --no-interaction --no-ansi
 
-# Adjusted the command to point to your main file correctly
-CMD ["python", "strategy/tangent/main_live.py"]
+# Copy the application code
+COPY . .
+
+# Launch application assuming strategy context as root
+CMD ["python", "tangent/main_live.py"]
