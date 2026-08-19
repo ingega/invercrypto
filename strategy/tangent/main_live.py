@@ -160,8 +160,8 @@ async def main():
     target_minute = config["target_minutes"]
     target_second = config["target_seconds"]
 
-    api_key = os.getenv("BINANCE_API_KEY")
-    api_secret = os.getenv("BINANCE_API_SECRET")
+    api_key = os.environ.get("BINANCE_API_KEY", "").strip('"' "'")
+    api_secret = os.environ.get("BINANCE_API_SECRET", "").strip('"' "'")
 
     client = await AsyncClient.create(
         api_key=api_key,
