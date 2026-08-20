@@ -677,9 +677,12 @@ async def direct_bet_tp_routine(
     # ------------------------------------------------------------------
     # 6. Update balances
     # ------------------------------------------------------------------
+    # collateral + profit = restored_collateral
+    collateral = await query_collateral(operation_id=operation_id)
+    net_restored = collateral + profit
     update_all_balances(
         profit=profit,
-        capital=capital,
+        capital=net_restored,
         gain=gain,
         ticker=symbol,
     )
@@ -780,12 +783,9 @@ async def verify_bet_result(msg, client, rules_mgr):
     # Common data
     # ------------------------------------------------------------------
     config = load_json_file(CONFIG_LIVE_FILE)
-    leverage = float(
-        config["leverage"]
-    )
-    capital = await query_capital(
-        operation_id=operation_id
-    )
+    leverage = float(config["leverage"])
+    capital = await query_capital(operation_id=operation_id)
+    collateral = await query_collateral(operation_id=operation_id)
     exit_date = datetime.now(timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
