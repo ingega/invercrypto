@@ -685,12 +685,16 @@ async def direct_bet_tp_routine(
         capital=net_restored,
         gain=gain,
         ticker=symbol,
+        end_operation=True
     )
     logger.info(
         "✅ [TP] Direct Bet TP routine completed | "
-        "symbol=%s | operation_id=%s",
+        "symbol=%s | operation_id=%s | profit=%.4f | collateral=%.4f | gain=%.4f", 
         symbol,
         operation_id,
+        profit,
+        net_restored,
+        gain
     )
 
 async def verify_bet_result(msg, client, rules_mgr):
