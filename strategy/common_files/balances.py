@@ -110,6 +110,18 @@ class LiveUpdateBalances:
                 new_balance,
                 self.capital,
             )
+            try:
+                # verify if gets double or more
+                initial_balance = load_json_file(CONFIG_LIVE_FILE)["initial_balance"]
+                if new_balance >= (initial_balance * 2):
+                    logger_live.info("🟩 [DUPLICATED BALANCE] strategy duplicates its"
+                                     "original balance, a withdrawall will be executed")
+                    self.withdrawal_balance()
+                    
+            except Exception as e:
+                logger.exception("❌ [DUPLICATED BALANCE] an error ocurred attempting call "
+                                 " a withdrawal: %s", e)
+                return
         except Exception:
             logger_live.exception(
                 "❌ [%s] failed to update balance.",
