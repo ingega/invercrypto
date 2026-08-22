@@ -258,6 +258,10 @@ class LiveUpdateBalances:
         """
         self.update_available_balance()
 
+    # ------------------------------------------------------------------
+    # Ticker balances
+    # ------------------------------------------------------------------
+
     def update_ticker_balance(self, ticker: str, gain:float):
         """
         update the individual ticker balance
@@ -291,6 +295,53 @@ class LiveUpdateBalances:
         except Exception as e:
             logger_live.exception("❌ [TICKER BALANCE] an exception ocurred during execution")
             raise RuntimeError ("update ticker balance fails") from e
+
+    # ------------------------------------------------------------------
+    # Collect / withdrawls
+    # ------------------------------------------------------------------
+
+    def reset_balance(self):
+        """
+        This method collect an ammount set in config['initial_balance']
+        once profit reaches the ammount
+        Workflow:
+            1. Once this method is called, the main balance is reseted
+            2. The available balance is substracted to the reseted main balance
+        """
+        try:
+            config = load_json_file(CONFIG_DIR_LIVE)
+            balances = load_json_file(LIVE_BALANCES)
+            original_balance = config['initial_balance']
+            balances["main_balance"] = original_balance
+            save_json_file(LIVE_BALANCES, balances)
+            # retrieve balance again, for safety
+            updated_main_balance = load_json_file(LIVE_BALANCES)["main_balance"]
+            logger_live.info("🏛️ [RESET BALANCE] main balance was reset to %.2f", 
+                            updated_main_balance)
+        except Exception:
+            logger.exception("❌ [RESET BALANCE] balance could not be reseted")
+            # return avoids execution break
+            return
+
+    def withdrawal_balance(self):
+        """
+        This method creates a virtual withdrawal for the main balance
+        Validation: main balance must be above of double of the initial
+        """
+        # validate the balance
+        main_balance = load_json_file(LIVE_BALANCES)["main_balance"]
+        initial_balance = load_json_file(CONFIG_LIVE_FILE)['initial_balance']
+        if main_balance < (2 * initial_balance):
+            logger_live.error("❌ [WITHDRAWAL] actual balance is not duplicated yet")
+            return
+        withdrawal = main_balance - initial_balance
+        # just create a logger info entry, that serves as evidence and track
+        logger.info("🏛️ [WITHDRAWAL] a virtual withdrawal of %.4f was executed", withdrawal)
+        # reset the main balance
+        self.reset_balance()
+
+
+
 
 
 def update_all_balances(profit: float, capital: float, gain: float, ticker: str, end_operation=False):
