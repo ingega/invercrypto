@@ -309,14 +309,14 @@ class LiveUpdateBalances:
             2. The available balance is substracted to the reseted main balance
         """
         try:
-            config = load_json_file(CONFIG_DIR_LIVE)
+            config = load_json_file(CONFIG_LIVE_FILE)
             balances = load_json_file(LIVE_BALANCES)
             original_balance = config['initial_balance']
             balances["main_balance"] = original_balance
             save_json_file(LIVE_BALANCES, balances)
             # retrieve balance again, for safety
             updated_main_balance = load_json_file(LIVE_BALANCES)["main_balance"]
-            logger_live.info("🏛️ [RESET BALANCE] main balance was reset to %.2f", 
+            logger_live.info("🏛️  [RESET BALANCE] main balance was reset to %.2f", 
                             updated_main_balance)
         except Exception:
             logger.exception("❌ [RESET BALANCE] balance could not be reseted")
@@ -332,16 +332,13 @@ class LiveUpdateBalances:
         main_balance = load_json_file(LIVE_BALANCES)["main_balance"]
         initial_balance = load_json_file(CONFIG_LIVE_FILE)['initial_balance']
         if main_balance < (2 * initial_balance):
-            logger_live.error("❌ [WITHDRAWAL] actual balance is not duplicated yet")
+            logger_live.error("❌  [WITHDRAWAL] actual balance is not duplicated yet")
             return
         withdrawal = main_balance - initial_balance
         # just create a logger info entry, that serves as evidence and track
         logger.info("🏛️ [WITHDRAWAL] a virtual withdrawal of %.4f was executed", withdrawal)
         # reset the main balance
         self.reset_balance()
-
-
-
 
 
 def update_all_balances(profit: float, capital: float, gain: float, ticker: str, end_operation=False):
@@ -574,13 +571,9 @@ def reset_balances():
 
 
 def main():
-    # get the capital for BTC first
-    ticker = "BTCUSDT"
-    capital = calculate_notional_size(ticker=ticker)
-    gain = -0.05
-    update_main_balance(gain=gain, capital=capital)
-    update_ticker_balance(ticker=ticker, gain=gain)
-    print("all routine completed")
+    # create a withdrawal
+    balance = LiveUpdateBalances(capital=0)
+    balance.withdrawal_balance()
 
 if __name__ == "__main__":
     main()
