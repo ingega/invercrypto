@@ -972,8 +972,26 @@ async def bet_execute(client,
 
     return result
 
-def main():
-    print("invercrypto/strategy/common_files/binance_utils/orders.py module")
+async def main():
+    import os
+    from binance import AsyncClient
+
+    api_key = os.environ.get("BINANCE_API_KEY", "").strip('"' "'")
+    api_secret = os.environ.get("BINANCE_API_SECRET", "").strip('"' "'")
+
+    # Correct async instantiation
+    client = await AsyncClient.create(
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    
+    try:
+        my_order = await GetOrders(client=client).get_order(symbol="BELUSDT", order_id=7370360817)
+        print(my_order)
+    finally:
+        # Good practice to close the connection socket cleanly
+        await client.close_connection()
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
