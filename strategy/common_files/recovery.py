@@ -66,10 +66,14 @@ async def get_binance_position(
         )
 
         if not positions:
-            raise RecoveryError(
-                f"No Binance position information returned "
-                f"for ticker={ticker}"
+            logger_live.warning(
+                "⚠️ [RECOVERY] No position array returned for ticker=%s. Assuming positionAmt=0.",
+                ticker,
             )
+            return {
+                "symbol": ticker,
+                "positionAmt": "0",
+            }
 
         if len(positions) != 1:
             raise RecoveryError(
@@ -852,7 +856,7 @@ async def verify_active_operations(
             bet_mode = await query_bet_mode(operation_id=operation_id)
             # and retrieve missing information from db
             capital = await query_capital(operation_id=operation_id)
-            leverage = load_json_file(CONFIG_LIVE_FILE)["leverge"]
+            leverage = load_json_file(CONFIG_LIVE_FILE)["leverage"]
             exit_date = datetime.now(tz=timezone.utc).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
@@ -955,3 +959,27 @@ async def verify_active_operations(
         raise RecoveryError(
             "Unexpected failure during active operation reconciliation"
         ) from e
+
+async def main():
+    import os
+    from binance import AsyncClient
+
+    api_key = os.environ.get("BINANCE_API_KEY", "").strip('"' "'")
+    api_secret = os.environ.get("BINANCE_API_SECRET", "").strip('"' "'")
+
+    # Correct async instantiation
+    client = await AsyncClient.create(
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+    
+    try:
+        res = await client.futures_position_information(symbol="BELUSDT")
+        print(res)
+    finally:
+        # Good practice to close the connection socket cleanly
+        await client.close_connection()
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
