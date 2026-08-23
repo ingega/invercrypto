@@ -5,6 +5,7 @@ from common_files.binance_utils.orders import SymbolRulesManager
 from common_files.live.bets import entries_pipeline, verify_bet_result, bet_time_expiration_handler
 from common_files.logger import get_logger
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
+from common_files.recovery import verify_active_operations
 from utils.timing import wait_for_time_trigger
 
 # init logger
@@ -222,6 +223,14 @@ async def main():
 
         while True:
 
+            # ----------------------------------------------------
+            #       Verify for orders reconciliation
+            # ----------------------------------------------------
+            # this validation is every timeframe, this way alway there's
+            # a reconciliation
+            logger.info("📛 [RECONCILIATION] reconciliation orders starts")
+            await verify_active_operations(client=client, rules_mgr=rules_mgr)
+            logger.info("📛 [RECONCILIATION] reconciliation orders ends")
             # -----------------------------------------------------
             # 1. Wait for execution window
             # -----------------------------------------------------

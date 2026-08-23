@@ -43,7 +43,7 @@ def get_binance_exchange_info(tickers: List[str]) -> list:
 
 
 def main():
-    tickers = ['TRUMPUSDT', 'ADAUSDT', 'HUSDT', '1000PEPEUSDT', 'TAOUSDT']
+    tickers = ['BELUSDT']
     information = get_binance_exchange_info(tickers=tickers)
     for t in information:
         print(t)
