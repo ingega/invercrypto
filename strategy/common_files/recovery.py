@@ -1,6 +1,7 @@
 # invercrypto/strategy/common_files/live/recovery.py
 
 from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from database import query_unresolved_operations, query_bet_mode, query_capital
@@ -44,20 +45,6 @@ async def get_binance_position(
 
     The function fails closed if Binance does not return a reliable
     position response.
-
-    Args:
-        client:
-            Binance AsyncClient instance.
-
-        ticker:
-            Binance symbol, e.g. BTCUSDT.
-
-    Returns:
-        Binance position dictionary.
-
-    Raises:
-        RecoveryError:
-            If Binance cannot provide a reliable position state.
     """
 
     try:
@@ -67,9 +54,11 @@ async def get_binance_position(
 
         if not positions:
             logger_live.warning(
-                "⚠️ [RECOVERY] No position array returned for ticker=%s. Assuming positionAmt=0.",
+                "⚠️ [RECOVERY] No position array returned for ticker=%s. "
+                "Assuming positionAmt=0.",
                 ticker,
             )
+
             return {
                 "symbol": ticker,
                 "positionAmt": "0",
@@ -142,16 +131,6 @@ async def get_algo_order(
     cannot be found.
 
     Raises RecoveryError when the Binance request itself fails.
-
-    Args:
-        client:
-            Binance AsyncClient instance.
-
-        algo_id:
-            Binance algo order ID.
-
-    Returns:
-        Algo order dictionary or None.
     """
 
     try:
@@ -206,20 +185,6 @@ async def recover_from_exit_order(
 
     The order is retrieved directly from Binance and validated before
     being considered a recoverable completed operation.
-
-    Args:
-        client:
-            Binance AsyncClient instance.
-
-        operation:
-            Operation retrieved from the database.
-
-    Returns:
-        Dictionary containing the recovered Binance order.
-
-    Raises:
-        RecoveryError:
-            If the order cannot be safely recovered.
     """
 
     operation_id = operation["operation_id"]
@@ -305,18 +270,15 @@ async def recover_from_exit_order(
 
         executed_qty = order.get("executedQty")
 
-        if executed_qty is None:
+        if executed_qty in (None, "", "0", 0, 0.0):
             raise RecoveryError(
-                f"Exit order does not contain executedQty | "
+                f"Exit order does not contain a valid executedQty | "
                 f"operation_id={operation_id} | "
                 f"exit_order_id={exit_order_id}"
             )
 
         # -------------------------------------------------------------
         # Validate execution price
-        #
-        # avgPrice is normally available for Futures orders.
-        # If Binance returns an empty/zero value, do not guess.
         # -------------------------------------------------------------
 
         avg_price = order.get("avgPrice")
@@ -328,14 +290,18 @@ async def recover_from_exit_order(
                 f"exit_order_id={exit_order_id}"
             )
 
+        # -------------------------------------------------------------
+        # Validate side
+        # -------------------------------------------------------------
+
         side = order.get("side")
 
         if side not in ("BUY", "SELL"):
             raise RecoveryError(
                 f"Exit order does not contain a valid side | "
                 f"operation_id={operation_id} | "
-                f"exit_order_id={exit_order_id}"
-                f"side retrieved: {side}"
+                f"exit_order_id={exit_order_id} | "
+                f"side={side}"
             )
 
         logger_live.info(
@@ -343,13 +309,11 @@ async def recover_from_exit_order(
             "operation_id=%s | "
             "exit_order_id=%s | "
             "executed_qty=%s | "
-            "avg_price=%s | "
-            "pnl=%.4f | "
-            "commission=%.4f",
+            "avg_price=%s",
             operation_id,
             exit_order_id,
             executed_qty,
-            avg_price
+            avg_price,
         )
 
         return order
@@ -379,6 +343,186 @@ async def recover_from_exit_order(
 
 
 # =============================================================================
+# Existing order recovery
+# =============================================================================
+
+
+async def recover_from_existing_order(
+    client,
+    operation: dict,
+) -> dict | None:
+    """
+    Checks whether the existing order_id is actually the order that
+    closed the Binance position.
+
+    This is critical for manual exits.
+
+    In a manual close, the database may contain:
+
+        order_id       = 12345
+        exit_order_id  = 12345
+
+    The equality does NOT mean that the exit order is unknown.
+
+    We therefore ask Binance whether order_id is FILLED.
+
+    Returns:
+        {
+            "exit_order": order,
+            "outcome": "TIE",
+        }
+
+        when the existing order is FILLED.
+
+    Returns:
+        None
+
+        when the existing order is not FILLED and recovery must
+        continue through TP/SL algo orders.
+    """
+
+    operation_id = operation["operation_id"]
+    ticker = operation["ticker"]
+    order_id = operation["order_id"]
+
+    logger_live.info(
+        "🔎 [RECOVERY] Checking existing order as possible exit | "
+        "operation_id=%s | ticker=%s | order_id=%s",
+        operation_id,
+        ticker,
+        order_id,
+    )
+
+    try:
+        order = await client.futures_get_order(
+            symbol=ticker,
+            orderId=order_id,
+        )
+
+        if not order:
+            raise RecoveryError(
+                f"Binance returned no data for "
+                f"order_id={order_id} | "
+                f"operation_id={operation_id} | "
+                f"ticker={ticker}"
+            )
+
+        # -------------------------------------------------------------
+        # Validate symbol
+        # -------------------------------------------------------------
+
+        returned_symbol = order.get("symbol")
+
+        if returned_symbol != ticker:
+            raise RecoveryError(
+                f"Order symbol mismatch | "
+                f"operation_id={operation_id} | "
+                f"expected={ticker} | "
+                f"received={returned_symbol}"
+            )
+
+        # -------------------------------------------------------------
+        # Validate order ID
+        # -------------------------------------------------------------
+
+        returned_order_id = order.get("orderId")
+
+        if returned_order_id is None:
+            raise RecoveryError(
+                f"Order response does not contain orderId | "
+                f"operation_id={operation_id} | "
+                f"order_id={order_id}"
+            )
+
+        if int(returned_order_id) != int(order_id):
+            raise RecoveryError(
+                f"Order ID mismatch | "
+                f"operation_id={operation_id} | "
+                f"expected={order_id} | "
+                f"received={returned_order_id}"
+            )
+
+        status = order.get("status")
+
+        logger_live.info(
+            "🔎 [RECOVERY] Existing order retrieved | "
+            "operation_id=%s | ticker=%s | "
+            "order_id=%s | status=%s | side=%s | "
+            "executed_qty=%s | avg_price=%s",
+            operation_id,
+            ticker,
+            order_id,
+            status,
+            order.get("side"),
+            order.get("executedQty"),
+            order.get("avgPrice"),
+        )
+
+        # -------------------------------------------------------------
+        # IMPORTANT:
+        #
+        # If the existing order is not FILLED, it cannot be the
+        # order that closed the position.
+        #
+        # Only in this case should we continue looking at TP/SL.
+        # -------------------------------------------------------------
+
+        if status != "FILLED":
+            logger_live.info(
+                "🔎 [RECOVERY] Existing order is not FILLED | "
+                "operation_id=%s | ticker=%s | "
+                "order_id=%s | status=%s",
+                operation_id,
+                ticker,
+                order_id,
+                status,
+            )
+
+            return None
+
+        # -------------------------------------------------------------
+        # The position is already CLOSED and this order is FILLED.
+        #
+        # Therefore this order is the strongest available evidence
+        # of the exit.
+        #
+        # This is the manual-close scenario.
+        # -------------------------------------------------------------
+
+        logger_live.warning(
+            "🟢 [RECOVERY] Existing FILLED order identified as "
+            "the exit order | "
+            "operation_id=%s | ticker=%s | "
+            "order_id=%s | outcome=TIE",
+            operation_id,
+            ticker,
+            order_id,
+        )
+
+        return {
+            "exit_order": order,
+            "outcome": "TIE",
+        }
+
+    except RecoveryError:
+        raise
+
+    except Exception as e:
+        logger_live.exception(
+            "❌ [RECOVERY] Failed to inspect existing order | "
+            "operation_id=%s | ticker=%s | order_id=%s",
+            operation_id,
+            ticker,
+            order_id,
+        )
+
+        raise RecoveryError(
+            f"Failed to inspect existing order "
+            f"{order_id} for operation {operation_id}"
+        ) from e
+
+
+# =============================================================================
 # Algo-order recovery
 # =============================================================================
 
@@ -398,6 +542,7 @@ def _get_actual_order_id(
 
     try:
         return int(actual_order_id)
+
     except (TypeError, ValueError) as e:
         raise RecoveryError(
             f"Invalid actualOrderId in algo response: "
@@ -413,29 +558,8 @@ async def recover_from_algo_order(
     Determines which exit algo order was triggered and retrieves
     the corresponding actual Binance order.
 
-    This function does NOT update the database.
-
-    It only reconstructs the Binance-side state.
-
-    Args:
-        client:
-            Binance AsyncClient instance.
-
-        operation:
-            Unresolved database operation.
-
-    Returns:
-        Dictionary containing:
-
-            {
-                "algo_order": ...,
-                "exit_order": ...
-            }
-
-    Raises:
-        RecoveryError:
-            If Binance cannot provide enough information to determine
-            the actual exit.
+    This function is only reached when the existing order_id was
+    NOT a FILLED exit order.
     """
 
     operation_id = operation["operation_id"]
@@ -466,9 +590,6 @@ async def recover_from_algo_order(
 
     # -----------------------------------------------------------------
     # Determine which algo order actually triggered.
-    #
-    # actualOrderId is the strongest evidence that the conditional
-    # order actually generated an execution order.
     # -----------------------------------------------------------------
 
     tp_actual_order_id = (
@@ -581,13 +702,19 @@ async def recover_closed_operation(
     Recovers an unresolved database operation whose Binance position
     is already closed.
 
-    Two scenarios exist:
+    Recovery priority:
 
-        1. exit_order_id is already known.
-        2. exit_order_id is still equal to order_id.
+        1. exit_order_id is different from order_id
+           -> retrieve the known exit order.
 
-    Returns:
-        Recovery information obtained from Binance.
+        2. exit_order_id == order_id
+           -> inspect order_id directly.
+
+        3. If order_id is FILLED
+           -> it is the exit order (manual close).
+
+        4. If order_id is not FILLED
+           -> search TP/SL algo orders.
     """
 
     operation_id = operation["operation_id"]
@@ -604,7 +731,7 @@ async def recover_closed_operation(
     )
 
     # -----------------------------------------------------------------
-    # Exit order already recorded.
+    # Exit order already recorded and different from entry order.
     # -----------------------------------------------------------------
 
     if exit_order_id != order_id:
@@ -627,13 +754,62 @@ async def recover_closed_operation(
         }
 
     # -----------------------------------------------------------------
-    # Exit order is unknown.
+    # IMPORTANT:
+    #
+    # exit_order_id == order_id does NOT necessarily mean that the
+    # exit order is unknown.
+    #
+    # A manual market close can use a normal Binance order ID.
+    #
+    # Therefore, inspect the existing order BEFORE querying the
+    # TP/SL algo orders.
+    # -----------------------------------------------------------------
+
+    logger_live.info(
+        "🔎 [RECOVERY] exit_order_id equals order_id. "
+        "Checking existing order before TP/SL recovery | "
+        "operation_id=%s | ticker=%s | order_id=%s",
+        operation_id,
+        ticker,
+        order_id,
+    )
+
+    known_order_recovery = await recover_from_existing_order(
+        client=client,
+        operation=operation,
+    )
+
+    # -----------------------------------------------------------------
+    # Existing order was FILLED.
+    #
+    # This is the manual-close scenario.
+    # -----------------------------------------------------------------
+
+    if known_order_recovery is not None:
+
+        logger_live.warning(
+            "🟢 [RECOVERY] Existing order recovered as exit | "
+            "operation_id=%s | ticker=%s | "
+            "exit_order_id=%s | outcome=%s",
+            operation_id,
+            ticker,
+            order_id,
+            known_order_recovery.get("outcome"),
+        )
+
+        return known_order_recovery
+
+    # -----------------------------------------------------------------
+    # Existing order was not FILLED.
+    #
+    # Only now do we search TP/SL algo orders.
     # -----------------------------------------------------------------
 
     logger_live.warning(
-        "⚠️ [RECOVERY] Exit order unknown | "
+        "⚠️ [RECOVERY] Existing order is not the exit. "
+        "Searching TP/SL algo orders | "
         "operation_id=%s | ticker=%s | "
-        "entry_order_id=%s",
+        "order_id=%s",
         operation_id,
         ticker,
         order_id,
@@ -712,9 +888,6 @@ async def verify_active_operations(
     """
     Reconciles unresolved database operations against Binance.
 
-    This function MUST complete successfully before the trading engine
-    is allowed to execute new operations.
-
     State matrix:
 
         DB UNRESOLVED
@@ -726,12 +899,7 @@ async def verify_active_operations(
                     │
                     └── recover_closed_operation()
 
-    IMPORTANT:
-
-        This function intentionally fails closed.
-
-        If one unresolved operation cannot be reconciled with confidence,
-        the exception propagates and the trading engine must not continue.
+    The recovery process fails closed.
     """
 
     logger_live.info(
@@ -792,6 +960,7 @@ async def verify_active_operations(
 
             try:
                 position_amount = float(position_amount_raw)
+
             except (TypeError, ValueError) as e:
                 raise RecoveryError(
                     f"Invalid positionAmt={position_amount_raw} | "
@@ -832,16 +1001,13 @@ async def verify_active_operations(
             )
 
             # ---------------------------------------------------------
-            # IMPORTANT:
-            #
-            # At this point we have reconstructed Binance's state,
-            # but we intentionally do NOT update SQLite here.
-            #
-            # The database update should go through the existing
-            # centralized operation-resolution function.
+            # Binance state reconstructed.
             # ---------------------------------------------------------
+
             outcome = recovery_data.get("outcome")
+
             exit_order = recovery_data["exit_order"].get("orderId")
+
             logger_live.warning(
                 "🟡 [RECOVERY] Operation reconstructed successfully | "
                 "operation_id=%s | ticker=%s | outcome=%s | "
@@ -851,17 +1017,78 @@ async def verify_active_operations(
                 outcome,
                 exit_order,
             )
-            # now, let's analize if it is a direct or secodary bet
-            # and if it is sl or tp
-            bet_mode = await query_bet_mode(operation_id=operation_id)
-            # and retrieve missing information from db
-            capital = await query_capital(operation_id=operation_id)
-            leverage = load_json_file(CONFIG_LIVE_FILE)["leverage"]
-            exit_date = datetime.now(tz=timezone.utc).strftime(
+
+            # ---------------------------------------------------------
+            # TIE EXIT
+            #
+            # The order was FILLED and the position is closed, but it
+            # was not generated by TP/SL.
+            #
+            # We deliberately do NOT classify it as TP or SL.
+            # ---------------------------------------------------------
+
+            if outcome == "TIE":
+
+                logger_live.warning(
+                    "🟠 [RECOVERY] Manual exit detected | "
+                    "operation_id=%s | ticker=%s | "
+                    "exit_order_id=%s | "
+                    "The existing FILLED order closed the position.",
+                    operation_id,
+                    ticker,
+                    exit_order,
+                )
+
+                # -----------------------------------------------------
+                # IMPORTANT:
+                #
+                # We have correctly identified the exit order.
+                #
+                # Your current code does not expose a dedicated
+                # manual-close resolution routine, so we stop here
+                # rather than incorrectly classifying the operation
+                # as TP or SL.
+                #
+                # Add the appropriate manual-close DB resolution here.
+                # -----------------------------------------------------
+
+                continue
+
+            # ---------------------------------------------------------
+            # From this point forward the existing TP/SL recovery
+            # logic remains unchanged.
+            # ---------------------------------------------------------
+
+            bet_mode = await query_bet_mode(
+                operation_id=operation_id
+            )
+
+            capital = await query_capital(
+                operation_id=operation_id
+            )
+
+            leverage = load_json_file(
+                CONFIG_LIVE_FILE
+            )["leverage"]
+
+            exit_date = datetime.now(
+                tz=timezone.utc
+            ).strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
-            if bet_mode == "D": # direct bet stage
-                if outcome == "SL": # direct bet sl
+
+            # =========================================================
+            # DIRECT BET
+            # =========================================================
+
+            if bet_mode == "D":
+
+                # -----------------------------------------------------
+                # Direct SL
+                # -----------------------------------------------------
+
+                if outcome == "SL":
+
                     await direct_bet_sl_routine(
                         client=client,
                         rules_mgr=rules_mgr,
@@ -870,19 +1097,29 @@ async def verify_active_operations(
                         exit_order_id=exit_order,
                         capital=capital,
                         leverage=leverage,
-                        exit_date=exit_date
+                        exit_date=exit_date,
                     )
-                    logger_live.info("☑️ [RECOVERY FUNCTION] position is on SL, routine from"
-                                     "direct bet sl was executed with next values:"
-                                     "symbol: %s | operation_id: %d | exit_order: %d |"
-                                     "capital: %.4f | leverage: %d | exit date: %s",
-                                     ticker,
-                                     operation_id,
-                                     exit_order,
-                                     capital,
-                                     leverage,
-                                     exit_date)
-                elif outcome == "TP": # direct tp
+
+                    logger_live.info(
+                        "☑️ [RECOVERY FUNCTION] Position is on SL. "
+                        "Direct bet SL routine executed | "
+                        "symbol=%s | operation_id=%d | "
+                        "exit_order=%d | capital=%.4f | "
+                        "leverage=%d | exit_date=%s",
+                        ticker,
+                        operation_id,
+                        exit_order,
+                        capital,
+                        leverage,
+                        exit_date,
+                    )
+
+                # -----------------------------------------------------
+                # Direct TP
+                # -----------------------------------------------------
+
+                elif outcome == "TP":
+
                     await direct_bet_tp_routine(
                         client=client,
                         symbol=ticker,
@@ -890,34 +1127,67 @@ async def verify_active_operations(
                         exit_order_id=exit_order,
                         capital=capital,
                         leverage=leverage,
-                        exit_date=exit_date
-                    )   
-                    logger_live.info("☑️ [RECOVERY FUNCTION] position is on TP, routine from"
-                            "direct bet tp was executed with next values:"
-                            "symbol: %s | operation_id: %d | exit_order: %d |"
-                            "capital: %.4f | leverage: %d | exit date: %s",
-                            ticker,
-                            operation_id,
-                            exit_order,
-                            capital,
-                            leverage,
-                            exit_date
-                            )
-            elif bet_mode == "I": # indirect (secondary) bet
+                        exit_date=exit_date,
+                    )
+
+                    logger_live.info(
+                        "☑️ [RECOVERY FUNCTION] Position is on TP. "
+                        "Direct bet TP routine executed | "
+                        "symbol=%s | operation_id=%d | "
+                        "exit_order=%d | capital=%.4f | "
+                        "leverage=%d | exit_date=%s",
+                        ticker,
+                        operation_id,
+                        exit_order,
+                        capital,
+                        leverage,
+                        exit_date,
+                    )
+
+            # =========================================================
+            # INDIRECT / SECONDARY BET
+            # =========================================================
+
+            elif bet_mode == "I":
+
+                # -----------------------------------------------------
+                # Secondary SL
+                # -----------------------------------------------------
+
                 if outcome == "SL":
-                    # retrieve missing data
-                    order_main = GetOrders(client=client)
+
+                    order_main = GetOrders(
+                        client=client
+                    )
+
                     order_data = await order_main.get_order(
-                        symbol=ticker, order_id=exit_order)
-                    side = order_data.get("side")
-                    order_trades = await order_main.get_order_execution(
                         symbol=ticker,
-                        order_id=exit_order)
-                    pnl = float(order_trades.get("realized_pnl"))
-                    commission = float(order_trades.get("commission"))
-                    gain = await calculate_gain(pnl=pnl, 
-                                                commission=commission,
-                                                operation_id=operation_id)
+                        order_id=exit_order,
+                    )
+
+                    side = order_data.get("side")
+
+                    order_trades = (
+                        await order_main.get_order_execution(
+                            symbol=ticker,
+                            order_id=exit_order,
+                        )
+                    )
+
+                    pnl = float(
+                        order_trades.get("realized_pnl")
+                    )
+
+                    commission = float(
+                        order_trades.get("commission")
+                    )
+
+                    gain = await calculate_gain(
+                        pnl=pnl,
+                        commission=commission,
+                        operation_id=operation_id,
+                    )
+
                     await secondary_bet_sl_resolution(
                         client=client,
                         rules_mgr=rules_mgr,
@@ -928,58 +1198,96 @@ async def verify_active_operations(
                         gain=gain,
                         pnl=pnl,
                         commission=commission,
-                        operation_id=operation_id
-                    )        
-                    logger_live.info("☑️ [RECOVERY FUNCTION] secondary SL routine was executed")
-                elif outcome == "TP": # Indirect TP
+                        operation_id=operation_id,
+                    )
+
+                    logger_live.info(
+                        "☑️ [RECOVERY FUNCTION] "
+                        "Secondary SL routine was executed"
+                    )
+
+                # -----------------------------------------------------
+                # Secondary TP
+                # -----------------------------------------------------
+
+                elif outcome == "TP":
+
                     await SecondaryFinalResolution(
                         operation_id=operation_id,
                         symbol=ticker,
-                        outcome="ITP"
+                        outcome="ITP",
                     ).close_operation()
-                    logger_live.info("☑️ [RECOVERY FUNCTION] secondary TP routine was executed")
+
+                    logger_live.info(
+                        "☑️ [RECOVERY FUNCTION] "
+                        "Secondary TP routine was executed"
+                    )
 
         logger_live.info(
             "🟢 [RECOVERY] Active operation reconciliation completed."
         )
 
     except RecoveryError:
+
         logger_live.exception(
             "🚨 [RECOVERY] Reconciliation failed. "
             "Trading engine MUST remain stopped."
         )
+
         raise
 
     except Exception as e:
+
         logger_live.exception(
             "🚨 [RECOVERY] Unexpected reconciliation failure. "
             "Trading engine MUST remain stopped."
         )
 
         raise RecoveryError(
-            "Unexpected failure during active operation reconciliation"
+            "Unexpected failure during active operation "
+            "reconciliation"
         ) from e
+
+
+# =============================================================================
+# Test / standalone execution
+# =============================================================================
+
 
 async def main():
     import os
+
     from binance import AsyncClient
 
-    api_key = os.environ.get("BINANCE_API_KEY", "").strip('"' "'")
-    api_secret = os.environ.get("BINANCE_API_SECRET", "").strip('"' "'")
+    api_key = os.environ.get(
+        "BINANCE_API_KEY",
+        "",
+    ).strip('"' "'")
 
-    # Correct async instantiation
+    api_secret = os.environ.get(
+        "BINANCE_API_SECRET",
+        "",
+    ).strip('"' "'")
+
     client = await AsyncClient.create(
         api_key=api_key,
         api_secret=api_secret,
     )
-    
+
     try:
-        res = await client.futures_position_information(symbol="BELUSDT")
+
+        res = await client.futures_position_information(
+            symbol="BELUSDT"
+        )
+
         print(res)
+
     finally:
-        # Good practice to close the connection socket cleanly
+
         await client.close_connection()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
