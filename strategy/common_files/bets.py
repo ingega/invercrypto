@@ -229,7 +229,6 @@ def resolve_secondary_bets(secondary_bets: dict, current_prices: dict) -> dict:
             remaining_secondary[ticker] = bet
             continue
         # retrieve data
-        entry_date = bet["entry_date"]
         actual_side = bet["actual_side"]
         entry_price = bet["entry_price"]
         exit_price = price_data[ticker]["close"]

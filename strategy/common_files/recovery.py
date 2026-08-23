@@ -1,11 +1,15 @@
 # invercrypto/strategy/common_files/live/recovery.py
 
 from __future__ import annotations
+from datetime import datetime, timezone
 
-from typing import Any
-
-from database import query_unresolved_operations
+from database import query_unresolved_operations, query_bet_mode, query_capital
+from common_files.binance_utils.orders import GetOrders
+from common_files.live.bets import direct_bet_tp_routine, direct_bet_sl_routine
+from common_files.live.bets import secondary_bet_sl_resolution, SecondaryFinalResolution
+from common_files.live.bets import calculate_gain
 from common_files.logger import get_logger
+from common_files.paths import load_json_file, CONFIG_LIVE_FILE
 
 
 logger_live = get_logger(__name__, log_live=True)
@@ -320,16 +324,28 @@ async def recover_from_exit_order(
                 f"exit_order_id={exit_order_id}"
             )
 
+        side = order.get("side")
+
+        if side not in ("BUY", "SELL"):
+            raise RecoveryError(
+                f"Exit order does not contain a valid side | "
+                f"operation_id={operation_id} | "
+                f"exit_order_id={exit_order_id}"
+                f"side retrieved: {side}"
+            )
+
         logger_live.info(
             "🟢 [RECOVERY] Exit order validated | "
             "operation_id=%s | "
             "exit_order_id=%s | "
             "executed_qty=%s | "
-            "avg_price=%s",
+            "avg_price=%s | "
+            "pnl=%.4f | "
+            "commission=%.4f",
             operation_id,
             exit_order_id,
             executed_qty,
-            avg_price,
+            avg_price
         )
 
         return order
@@ -820,16 +836,104 @@ async def verify_active_operations(
             # The database update should go through the existing
             # centralized operation-resolution function.
             # ---------------------------------------------------------
-
+            outcome = recovery_data.get("outcome")
+            exit_order = recovery_data["exit_order"].get("orderId")
             logger_live.warning(
                 "🟡 [RECOVERY] Operation reconstructed successfully | "
                 "operation_id=%s | ticker=%s | outcome=%s | "
                 "exit_order_id=%s",
                 operation_id,
                 ticker,
-                recovery_data.get("outcome"),
-                recovery_data["exit_order"].get("orderId"),
+                outcome,
+                exit_order,
             )
+            # now, let's analize if it is a direct or secodary bet
+            # and if it is sl or tp
+            bet_mode = await query_bet_mode(operation_id=operation_id)
+            # and retrieve missing information from db
+            capital = await query_capital(operation_id=operation_id)
+            leverage = load_json_file(CONFIG_LIVE_FILE)["leverge"]
+            exit_date = datetime.now(tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            if bet_mode == "D": # direct bet stage
+                if outcome == "SL": # direct bet sl
+                    await direct_bet_sl_routine(
+                        client=client,
+                        rules_mgr=rules_mgr,
+                        symbol=ticker,
+                        operation_id=operation_id,
+                        exit_order_id=exit_order,
+                        capital=capital,
+                        leverage=leverage,
+                        exit_date=exit_date
+                    )
+                    logger_live.info("☑️ [RECOVERY FUNCTION] position is on SL, routine from"
+                                     "direct bet sl was executed with next values:"
+                                     "symbol: %s | operation_id: %d | exit_order: %d |"
+                                     "capital: %.4f | leverage: %d | exit date: %s",
+                                     ticker,
+                                     operation_id,
+                                     exit_order,
+                                     capital,
+                                     leverage,
+                                     exit_date)
+                elif outcome == "TP": # direct tp
+                    await direct_bet_tp_routine(
+                        client=client,
+                        symbol=ticker,
+                        operation_id=operation_id,
+                        exit_order_id=exit_order,
+                        capital=capital,
+                        leverage=leverage,
+                        exit_date=exit_date
+                    )   
+                    logger_live.info("☑️ [RECOVERY FUNCTION] position is on TP, routine from"
+                            "direct bet tp was executed with next values:"
+                            "symbol: %s | operation_id: %d | exit_order: %d |"
+                            "capital: %.4f | leverage: %d | exit date: %s",
+                            ticker,
+                            operation_id,
+                            exit_order,
+                            capital,
+                            leverage,
+                            exit_date
+                            )
+            elif bet_mode == "I": # indirect (secondary) bet
+                if outcome == "SL":
+                    # retrieve missing data
+                    order_main = GetOrders(client=client)
+                    order_data = await order_main.get_order(
+                        symbol=ticker, order_id=exit_order)
+                    side = order_data.get("side")
+                    order_trades = await order_main.get_order_execution(
+                        symbol=ticker,
+                        order_id=exit_order)
+                    pnl = float(order_trades.get("realized_pnl"))
+                    commission = float(order_trades.get("commission"))
+                    gain = await calculate_gain(pnl=pnl, 
+                                                commission=commission,
+                                                operation_id=operation_id)
+                    await secondary_bet_sl_resolution(
+                        client=client,
+                        rules_mgr=rules_mgr,
+                        symbol=ticker,
+                        side=side,
+                        exit_order_id=exit_order,
+                        exit_price=0,
+                        gain=gain,
+                        pnl=pnl,
+                        commission=commission,
+                        operation_id=operation_id
+                    )        
+                    logger_live.info("☑️ [RECOVERY FUNCTION] secondary SL routine was executed")
+                elif outcome == "TP": # Indirect TP
+                    await SecondaryFinalResolution(
+                        operation_id=operation_id,
+                        symbol=ticker,
+                        outcome="ITP"
+                    ).close_operation()
+                    logger_live.info("☑️ [RECOVERY FUNCTION] secondary TP routine was executed")
 
         logger_live.info(
             "🟢 [RECOVERY] Active operation reconciliation completed."
