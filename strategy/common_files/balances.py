@@ -100,15 +100,21 @@ class LiveUpdateBalances:
             # Constraint: available_balance <= main_balance
             main_balance = balances.get("main_balance")
 
-            if balance_key == "available_balance" and main_balance is not None:
-                if new_balance > main_balance:
-                    logger.error(
-                        "❌🏛️ [AVAILABLE BALANCE] the available balance: %.4f "
-                        "is greater than main balance: %.4f, it will be set to main balance",
-                        new_balance,
-                        main_balance,
-                    )
-                    new_balance = main_balance
+            if balance_key == "available_balance":
+                if main_balance is not None:
+                    if new_balance > main_balance:
+                        logger.error(
+                            "❌🏛️ [AVAILABLE BALANCE] the available balance: %.4f "
+                            "is greater than main balance: %.4f, it will be set to main balance",
+                            new_balance,
+                            main_balance,
+                        )
+                        new_balance = main_balance
+                    else:
+                        logger.info("✅ [AVAILABLE BALANCE] available balance: %.4f is correctly" 
+                                    " lt main balance: %.4f",
+                                    new_balance, main_balance)
+            
 
             balances[balance_key] = new_balance
             save_json_file(
