@@ -79,6 +79,9 @@ class LiveUpdateBalances:
             Supported values:
                 - "main_balance"
                 - "available_balance"
+        -----------
+        Contraint:
+            available_balance is <= main_balance
         """
         try:
             balances = load_json_file(LIVE_BALANCES)
@@ -99,7 +102,6 @@ class LiveUpdateBalances:
                 )
             # Constraint: available_balance <= main_balance
             main_balance = balances.get("main_balance")
-
             if balance_key == "available_balance":
                 if main_balance is not None:
                     if new_balance > main_balance:
@@ -114,8 +116,11 @@ class LiveUpdateBalances:
                         logger.info("✅ [AVAILABLE BALANCE] available balance: %.4f is correctly" 
                                     " lt main balance: %.4f",
                                     new_balance, main_balance)
+                else:
+                    logger.exception("❌ [MAIN BALANCE] main_balance could not be retrieved from %s",
+                                     LIVE_BALANCES)
+                    raise
             
-
             balances[balance_key] = new_balance
             save_json_file(
                 LIVE_BALANCES,
@@ -132,7 +137,7 @@ class LiveUpdateBalances:
             try:
                 # verify if gets double or more
                 initial_balance = load_json_file(CONFIG_LIVE_FILE)["initial_balance"]
-                if new_balance >= (initial_balance * 2):
+                if main_balance >= (initial_balance * 2):
                     logger_live.info("🟩 [DUPLICATED BALANCE] strategy duplicates its"
                                      "original balance, a withdrawall will be executed")
                     self.withdrawal_balance()
