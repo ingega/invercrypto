@@ -12,7 +12,7 @@ jobs:
     steps:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
-      
+
       - name: Deploy Strategy via SSH to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -20,51 +20,192 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
+
           script: |
-            echo "Firing up the live deployment pipeline on EC2..."
-            
+            set -e
+
+            echo "=================================================="
+            echo "🚀 FIRING UP INVERCRYPTO LIVE DEPLOYMENT"
+            echo "=================================================="
+
             TARGET_DIR="/home/ec2-user/invercrypto"
-            
+            IMAGE_NAME="invercrypto-engine"
+            CONTAINER_NAME="invercrypto-live"
+
+            echo ""
+            echo "📂 Target directory:"
+            echo "$TARGET_DIR"
+
+            # ================================================================
+            # 1. SYNCHRONIZE SOURCE CODE
+            # ================================================================
+
             if [ ! -d "$TARGET_DIR/.git" ]; then
-              echo "🔄 Folder untracked. Initializing clean clone sequence..."
+
+              echo ""
+              echo "🔄 Repository not found. Initializing clean clone..."
+
               rm -rf /tmp/invercrypto_clone
-              git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git /tmp/invercrypto_clone
-              mkdir -p $TARGET_DIR
-              cp -r /tmp/invercrypto_clone/. $TARGET_DIR/
+
+              git clone \
+                https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git \
+                /tmp/invercrypto_clone
+
+              mkdir -p "$TARGET_DIR"
+
+              cp -r /tmp/invercrypto_clone/. "$TARGET_DIR/"
+
               rm -rf /tmp/invercrypto_clone
-              cd $TARGET_DIR
-              git config --global --add safe.directory $TARGET_DIR
+
+              cd "$TARGET_DIR"
+
+              git config --global --add safe.directory "$TARGET_DIR"
+
             else
-              cd $TARGET_DIR
-              echo "Pulling latest quantitative engine updates..."
-              git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-              git reset --hard HEAD
-              git pull origin main
+
+              cd "$TARGET_DIR"
+
+              echo ""
+              echo "🔄 Pulling latest quantitative engine updates..."
+
+              git remote set-url origin \
+                https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+
+              git fetch origin main
+
+              git reset --hard origin/main
+
+              git clean -fd
+
             fi
 
-            # Environment file fallback guard
+            # ================================================================
+            # 2. VERIFY DEPLOYED COMMIT
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "📌 SOURCE CODE VERIFICATION"
+            echo "=================================================="
+
+            DEPLOYED_COMMIT=$(git rev-parse HEAD)
+
+            echo "Commit: $DEPLOYED_COMMIT"
+
+            git log -1 --oneline
+
+            echo ""
+            echo "Expected GitHub commit:"
+            echo "${{ github.sha }}"
+
+            if [ "$DEPLOYED_COMMIT" != "${{ github.sha }}" ]; then
+              echo ""
+              echo "❌ ERROR: EC2 repository does not match GitHub commit!"
+              echo "Expected: ${{ github.sha }}"
+              echo "Found:    $DEPLOYED_COMMIT"
+              exit 1
+            fi
+
+            echo ""
+            echo "✅ Source code matches GitHub Actions commit."
+
+            # ================================================================
+            # 3. ENVIRONMENT FILE GUARD
+            # ================================================================
+
+            echo ""
+            echo "🔐 Checking environment configuration..."
+
             if [ ! -f ".env" ]; then
               echo "❌ ERROR: .env file not found."
               exit 1
             fi
 
-            # =========================================================================
-            # 🛡️ PERSISTENT DATA LOGS DIRECTORY GUARD
-            # =========================================================================
-            echo "📁 Ensuring persistent storage directory exists..."
-            mkdir -p $TARGET_DIR/data
-            chmod -R 777 $TARGET_DIR/data
+            echo "✅ .env file found."
 
-            echo "📦 Commencing Docker image compilation layers..."
-            docker build -f strategy/Dockerfile -t invercrypto-engine .
-            
-            echo "🛑 Clearing stale container processes..."
-            docker stop invercrypto-live || true
-            docker rm invercrypto-live || true
+            # ================================================================
+            # 4. PERSISTENT DATA DIRECTORY
+            # ================================================================
 
-            echo "🚀 Launching live automated strategy instance with CloudWatch Streams..."
+            echo ""
+            echo "📁 Ensuring persistent data directory exists..."
+
+            mkdir -p "$TARGET_DIR/data"
+
+            chmod -R 777 "$TARGET_DIR/data"
+
+            echo "✅ Persistent data directory ready."
+
+            # ================================================================
+            # 5. BUILD DOCKER IMAGE
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "🐳 BUILDING DOCKER IMAGE"
+            echo "=================================================="
+
+            echo "Image: $IMAGE_NAME"
+            echo "Dockerfile: strategy/Dockerfile"
+            echo "Build context: $TARGET_DIR"
+
+            docker build \
+              --no-cache \
+              -f strategy/Dockerfile \
+              -t "$IMAGE_NAME:latest" \
+              .
+
+            echo ""
+            echo "✅ Docker build completed successfully."
+
+            # ================================================================
+            # 6. VERIFY GENERATED IMAGE
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "🔍 DOCKER IMAGE VERIFICATION"
+            echo "=================================================="
+
+            IMAGE_ID=$(docker inspect "$IMAGE_NAME:latest" \
+              --format '{{.Id}}')
+
+            IMAGE_CREATED=$(docker inspect "$IMAGE_NAME:latest" \
+              --format '{{.Created}}')
+
+            echo "Image ID:      $IMAGE_ID"
+            echo "Created:       $IMAGE_CREATED"
+
+            echo ""
+            echo "Docker image list:"
+
+            docker images "$IMAGE_NAME"
+
+            # ================================================================
+            # 7. STOP OLD CONTAINER
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "🛑 CLEARING OLD CONTAINER"
+            echo "=================================================="
+
+            docker stop "$CONTAINER_NAME" || true
+            docker rm "$CONTAINER_NAME" || true
+
+            echo "✅ Old container removed."
+
+            # ================================================================
+            # 8. START NEW CONTAINER
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "🚀 STARTING NEW LIVE ENGINE"
+            echo "=================================================="
+
             docker run -d \
-              --name invercrypto-live \
+              --name "$CONTAINER_NAME" \
               --restart unless-stopped \
               --log-driver=awslogs \
               --log-opt awslogs-region=sa-east-1 \
@@ -72,19 +213,120 @@ jobs:
               --log-opt awslogs-stream=live-stream \
               --log-opt awslogs-create-group=true \
               --env-file .env \
-              -v $TARGET_DIR/data:/app/data \
-              invercrypto-engine
+              -v "$TARGET_DIR/data:/app/data" \
+              "$IMAGE_NAME:latest"
 
-            echo "🦅 Live Engine online! (Logs are now routing directly to AWS CloudWatch)"
-            
-            # =========================================================================
-            # 🧹 SAFE PRODUCTION DISK CLEANUP PROTOCOL
-            # =========================================================================
-            echo "🧹 Commencing disk recovery layer..."
-            
-            # Safe standard prune to clear building leftovers without a complete purge
+            echo "✅ Container started."
+
+            # ================================================================
+            # 9. VERIFY RUNNING CONTAINER
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "🔎 RUNNING CONTAINER VERIFICATION"
+            echo "=================================================="
+
+            RUNNING_IMAGE=$(docker inspect "$CONTAINER_NAME" \
+              --format '{{.Image}}')
+
+            CONTAINER_CREATED=$(docker inspect "$CONTAINER_NAME" \
+              --format '{{.Created}}')
+
+            echo "Container:      $CONTAINER_NAME"
+            echo "Container image: $RUNNING_IMAGE"
+            echo "Container created: $CONTAINER_CREATED"
+
+            echo ""
+            echo "Expected image:"
+            echo "$IMAGE_ID"
+
+            if [ "$RUNNING_IMAGE" != "$IMAGE_ID" ]; then
+
+              echo ""
+              echo "❌ CRITICAL ERROR!"
+              echo "Container is NOT running the image we just built."
+
+              echo ""
+              echo "Expected:"
+              echo "$IMAGE_ID"
+
+              echo ""
+              echo "Running:"
+              echo "$RUNNING_IMAGE"
+
+              exit 1
+
+            fi
+
+            echo ""
+            echo "✅ Container is running the newly built image."
+
+            # ================================================================
+            # 10. CONTAINER STATUS
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "📊 CONTAINER STATUS"
+            echo "=================================================="
+
+            docker ps \
+              --filter "name=$CONTAINER_NAME" \
+              --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}"
+
+            # ================================================================
+            # 11. RECENT CONTAINER LOGS
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "📜 INITIAL ENGINE LOG"
+            echo "=================================================="
+
+            sleep 5
+
+            docker logs --tail 30 "$CONTAINER_NAME" || true
+
+            # ================================================================
+            # 12. DISK CLEANUP
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "🧹 DOCKER DISK CLEANUP"
+            echo "=================================================="
+
             docker builder prune -f
+
             docker image prune -f
-            
-            echo "📊 Current System Storage Telemetry:"
+
+            # ================================================================
+            # 13. FINAL SYSTEM TELEMETRY
+            # ================================================================
+
+            echo ""
+            echo "=================================================="
+            echo "📊 FINAL SYSTEM TELEMETRY"
+            echo "=================================================="
+
             docker system df
+
+            echo ""
+            echo "=================================================="
+            echo "🦅 INVERCRYPTO LIVE ENGINE DEPLOYED SUCCESSFULLY"
+            echo "=================================================="
+
+            echo "Commit:"
+            echo "$DEPLOYED_COMMIT"
+
+            echo ""
+            echo "Image:"
+            echo "$IMAGE_ID"
+
+            echo ""
+            echo "Container:"
+            echo "$CONTAINER_NAME"
+
+            echo ""
+            echo "Deployment completed successfully."
