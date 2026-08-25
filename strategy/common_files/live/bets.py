@@ -851,6 +851,21 @@ async def verify_bet_result(msg, client, rules_mgr):
             )
             return
         elif bet_mode == "I":
+            # first update the partial record, in order to compute completed totals
+            # calculate gain
+            tp_gain = await calculate_gain(pnl=realized_pnl, commission=commission, operation_id=operation_id)
+            update_partial_record = UpdatePartialLiveOPeration(
+                exit_order_id=exit_order_id,
+                exit_date=exit_date,
+                exit_price=avg_price,
+                outcome='TP',
+                gain=tp_gain,
+                pnl=realized_pnl,
+                commission=commission,
+                operation_id=operation_id
+            )
+            await update_live_partial_operation(update_record=update_partial_record)
+            # now we can update the completed record
             tp_outcome = SecondaryFinalResolution(operation_id=operation_id, symbol=symbol, outcome="ITP")
             await tp_outcome.close_operation()
             return
