@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from database import query_unresolved_operations, query_bet_mode, query_capital
+from database import query_unresolved_operations, query_bet_mode, query_capital, update_completed_operations, update_live_partial_operation
+from data_classes import UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
 from common_files.binance_utils.orders import GetOrders
 from common_files.live.bets import direct_bet_tp_routine, direct_bet_sl_routine
 from common_files.live.bets import secondary_bet_sl_resolution, SecondaryFinalResolution
@@ -354,29 +355,20 @@ async def recover_from_existing_order(
     """
     Checks whether the existing order_id is actually the order that
     closed the Binance position.
-
     This is critical for manual exits.
-
     In a manual close, the database may contain:
-
         order_id       = 12345
         exit_order_id  = 12345
-
     The equality does NOT mean that the exit order is unknown.
-
     We therefore ask Binance whether order_id is FILLED.
-
     Returns:
         {
             "exit_order": order,
             "outcome": "TIE",
         }
-
         when the existing order is FILLED.
-
     Returns:
         None
-
         when the existing order is not FILLED and recovery must
         continue through TP/SL algo orders.
     """
@@ -841,6 +833,7 @@ def validate_recovery_operation(
         "exit_order_id",
         "tp_algo_id",
         "sl_algo_id",
+        "exit_price",
     )
 
     missing_fields = [
@@ -874,6 +867,11 @@ def validate_recovery_operation(
         raise RecoveryError(
             "Recovery operation contains NULL exit_order_id"
         )
+
+    if operation["exit_price"] is None:
+            raise RecoveryError(
+                "Recovery operation contains NULL exit_order_id"
+            )
 
 
 # =============================================================================
@@ -1005,17 +1003,19 @@ async def verify_active_operations(
             # ---------------------------------------------------------
 
             outcome = recovery_data.get("outcome")
-
             exit_order = recovery_data["exit_order"].get("orderId")
+            # zero in db, recovery process contains failures
+            average_price = recovery_data["exit_order"].get("avgPrice", 0)
 
             logger_live.warning(
                 "🟡 [RECOVERY] Operation reconstructed successfully | "
                 "operation_id=%s | ticker=%s | outcome=%s | "
-                "exit_order_id=%s",
+                "exit_order_id=%s | exit_price=%.6f",
                 operation_id,
                 ticker,
                 outcome,
                 exit_order,
+                average_price
             )
 
             # ---------------------------------------------------------
@@ -1051,12 +1051,33 @@ async def verify_active_operations(
                 #
                 # Add the appropriate manual-close DB resolution here.
                 # -----------------------------------------------------
-
+                # GetOrders class can retrive the necessary data
+                order_data = GetOrders(client=client)
+                retrieve_data = await order_data.get_order_execution(symbol=ticker, order_id=exit_order)
+                # update the partial_operation first
+                tie_gain = await calculate_gain(pnl=pnl, commission=commission, operation_id=operation_id)
+                update_partial_record = UpdatePartialLiveOPeration(
+                    exit_order_id=exit_order, 
+                    exit_date=exit_date,
+                    exit_price=average_price,
+                    outcome="TIE",
+                    gain=tie_gain,
+                    pnl=pnl,
+                    commission=commission,
+                    operation_id=operation_id
+                )
+                await update_live_partial_operation(update_record=update_partial_record)
+                # now with partial position completed, close the complete_operation
+                await SecondaryFinalResolution(
+                    operation_id=operation_id,
+                    symbol=ticker, 
+                    outcome="TIE").close_operation()
+                
+                # continue breaks this position and goes on with next
                 continue
 
             # ---------------------------------------------------------
-            # From this point forward the existing TP/SL recovery
-            # logic remains unchanged.
+            # TP/SL recovery
             # ---------------------------------------------------------
 
             bet_mode = await query_bet_mode(

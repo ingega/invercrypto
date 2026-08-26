@@ -789,7 +789,6 @@ async def verify_bet_result(msg, client, rules_mgr):
     config = load_json_file(CONFIG_LIVE_FILE)
     leverage = float(config["leverage"])
     capital = await query_capital(operation_id=operation_id)
-    collateral = await query_collateral(operation_id=operation_id)
     exit_date = datetime.now(timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
