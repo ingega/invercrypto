@@ -945,6 +945,7 @@ async def query_unresolved_operations() -> list[dict]:
             p.exit_order_id,
             p.entry_date,
             p.exit_date,
+            p.exit_price,
             p.side,
             p.tp,
             p.sl,

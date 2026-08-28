@@ -505,9 +505,10 @@ async def direct_bet_sl_routine(
     # variable adjust is used for that
     adjust = abs(gain) + commission
     logger.info(
-        "🟥 [SL RESULT] symbol=%s | pnl=%.8f | commission=%.8f | "
+        "🟥 [SL RESULT] symbol=%s | side=%s | pnl=%.8f | commission=%.8f | "
         "profit=%.8f | gain=%.6f | adjust=%.8f",
         symbol,
+        side,
         pnl,
         commission,
         profit,
@@ -821,6 +822,16 @@ async def verify_bet_result(msg, client, rules_mgr):
             return
         elif bet_mode == "I":
             gain = await calculate_gain(pnl=realized_pnl, commission=commission, operation_id=operation_id)
+            logger.info("[SL RESOLUTION] SL pipeline values: symbol=%s | side=%s | exit_order=%d | "
+                        "exit_price=%.6f | gain=%.4f | pnl=%.4f | commision=%.4f | operation_id=%d",
+                        symbol,
+                        side,
+                        exit_order_id,
+                        avg_price,
+                        gain,
+                        realized_pnl,
+                        commission,
+                        operation_id)
             await secondary_bet_sl_resolution(
                 client=client,
                 rules_mgr=rules_mgr,
