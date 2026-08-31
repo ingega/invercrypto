@@ -1054,8 +1054,8 @@ async def verify_active_operations(
                 # GetOrders class can retrive the necessary data
                 order_data = GetOrders(client=client)
                 retrieve_data = await order_data.get_order_execution(symbol=ticker, order_id=exit_order)
-                pnl = float(order_trades.get("realized_pnl"))
-                commission = float(order_trades.get("commission"))
+                pnl = float(retrieve_data.get("realized_pnl"))
+                commission = float(retrieve_data.get("commission"))
                 # update the partial_operation first
                 tie_gain = await calculate_gain(pnl=pnl, commission=commission, operation_id=operation_id)
                 update_partial_record = UpdatePartialLiveOPeration(
