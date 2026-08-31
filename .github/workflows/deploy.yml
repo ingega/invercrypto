@@ -130,9 +130,12 @@ jobs:
             echo ""
             echo "📁 Ensuring persistent data directory exists..."
 
-            mkdir -p "$TARGET_DIR/data"
+            mkdir -p "$TARGET_DIR/data/logs"
 
-            chmod -R 777 "$TARGET_DIR/data"
+            sudo chown -R ec2-user:ec2-user "$TARGET_DIR/data"
+
+            chmod 755 "$TARGET_DIR/data"
+            chmod 755 "$TARGET_DIR/data/logs"
 
             echo "✅ Persistent data directory ready."
 

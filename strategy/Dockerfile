@@ -23,5 +23,13 @@ RUN poetry install --no-root --only main --no-interaction --no-ansi
 # Copy the application code
 COPY . .
 
-# Launch application assuming strategy context as root
+# Create application user matching EC2 ec2-user
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid 1000 --create-home appuser \
+    && chown -R appuser:appuser /app
+
+# Run application as non-root user
+USER appuser
+
+# Launch application
 CMD ["python", "tangent/main_live.py"]
