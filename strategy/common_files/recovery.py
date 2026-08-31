@@ -1058,9 +1058,10 @@ async def verify_active_operations(
                 commission = float(retrieve_data.get("commission"))
                 # update the partial_operation first
                 tie_gain = await calculate_gain(pnl=pnl, commission=commission, operation_id=operation_id)
+                tie_exit_date = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 update_partial_record = UpdatePartialLiveOPeration(
                     exit_order_id=exit_order, 
-                    exit_date=exit_date,
+                    exit_date=tie_exit_date,
                     exit_price=average_price,
                     outcome="TIE",
                     gain=tie_gain,
