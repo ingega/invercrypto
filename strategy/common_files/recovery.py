@@ -1005,7 +1005,7 @@ async def verify_active_operations(
             outcome = recovery_data.get("outcome")
             exit_order = recovery_data["exit_order"].get("orderId")
             # zero in db, recovery process contains failures
-            average_price = recovery_data["exit_order"].get("avgPrice", 0)
+            average_price = float(recovery_data["exit_order"].get("avgPrice", 0))
 
             logger_live.warning(
                 "🟡 [RECOVERY] Operation reconstructed successfully | "
