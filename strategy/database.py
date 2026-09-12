@@ -673,7 +673,6 @@ async def calculate_accumulated_loss(
     query = """
         SELECT
             ABS(COALESCE(SUM(gain), 0))
-            + COALESCE(SUM(commission), 0)
         FROM partial_operations
         WHERE operation_id = ?
     """

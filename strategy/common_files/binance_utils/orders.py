@@ -910,10 +910,14 @@ async def bet_execute(client,
 
     # Load configuration
     config = load_json_file(CONFIG_LIVE_FILE)
+    # in secondary mode, the offset is adjust + flip_percentage, but the tp is adjust + profit_percentage
+    # in direct mode, the offset is the same for both sl and tp
     if bet_mode == "direct":
-        pct_offset = config.get("direct_bet_percentage", 0.005)
+        sl_pct_offset = config.get("direct_bet_percentage", 0.005)
+        tp_pct_offset = sl_pct_offset
     else:
-        pct_offset = config.get("flip_percentage", 0.005)
+        sl_pct_offset = config.get("flip_percentage", 0.005)
+        tp_pct_offset = config.get("profit_percentage", 0.02)
 
     # quantity depends if there's actual bet or not
     active_ticker_bet, quantity =  await is_ticker_in_bet(ticker=symbol)
@@ -943,11 +947,11 @@ async def bet_execute(client,
 
     # Calculate SL and TP based on the side of the trade
     if side.upper() == "BUY":
-        tp_price = current_price * (1.0 + pct_offset + adjust) # only tp could be adjusted
-        sl_price = current_price * (1.0 - pct_offset)
+        tp_price = current_price * (1.0 + tp_pct_offset + adjust) # only tp could be adjusted
+        sl_price = current_price * (1.0 - sl_pct_offset)
     elif side.upper() == "SELL":
-        tp_price = current_price * (1.0 - pct_offset - adjust)
-        sl_price = current_price * (1.0 + pct_offset)
+        tp_price = current_price * (1.0 - tp_pct_offset - adjust)
+        sl_price = current_price * (1.0 + sl_pct_offset)
     else:
         logger.error(f"Invalid side '{side}' provided. Must be 'BUY' or 'SELL'.")
         return {"status": "FAILED", "error": "Invalid side provided."}

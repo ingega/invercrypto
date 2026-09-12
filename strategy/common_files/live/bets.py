@@ -376,6 +376,8 @@ async def secondary_bet_sl_resolution(
     acumm_loss = await calculate_accumulated_loss(operation_id=operation_id)
     config = load_json_file(CONFIG_LIVE_FILE)
     max_sl_allowed = config["sl_percentage"]
+    logger.info(f"[ACUMMULATED LOSS] the acummulated loss for operation {operation_id} is "
+                f"{acumm_loss:.6f} and the max allowed is {max_sl_allowed:.6f}")
     if acumm_loss >= max_sl_allowed:
         final_sl = SecondaryFinalResolution(operation_id=operation_id, symbol=symbol, outcome="SL")
         await final_sl.close_operation()
@@ -407,9 +409,9 @@ async def secondary_bet_flip_resolution(client,
                         bet_mode="secondary",
                         adjust=adjust,
                         oper_id=operation_id)
-        logger.info("✅ [FLIP] flip routine was executed successfully")
+        logger.info(f"✅ [FLIP] flip routine for operation {operation_id} was executed successfully")
     except Exception:
-        logger.exception("❌ [FLIP] secondary bet flip function fails")
+        logger.exception(f"❌ [FLIP] secondary bet flip function fails for operation {operation_id}")
 
 async def bet_time_expiration(operation_id: int) -> bool:
     """
