@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any, Dict
 import aiohttp
@@ -728,6 +728,77 @@ class CreateOrderManager:
                 "❌ [ORDER DEFENSE] Failed to verify open orders "
                 "for symbol=%s",
                 symbol,
+            )
+            raise
+
+        # first defensive balance constraint: if main_blance is below max_loss_balance_percentage, abort execution
+        try:
+            main_balance = load_json_file(LIVE_BALANCES).get("available_balance", 0.0)
+            max_loss_balance_percentage = load_json_file(CONFIG_LIVE_FILE).get("max_loss_balance_percentage", 0.35)
+            min_allowed_balance = main_balance * (1 - max_loss_balance_percentage)
+            if main_balance < min_allowed_balance:  
+                logger.error(
+                    "⚠️ [ORDER DEFENSE] Main balance %.2f is below the "
+                    "allowed threshold %.2f. Aborting execution.",
+                    main_balance,
+                    min_allowed_balance,
+                )
+                raise RuntimeError(
+                    f"Main balance {main_balance:.2f} is below the "
+                    f"allowed threshold {min_allowed_balance:.2f}. "
+                    f"Aborting execution."
+                )
+        except Exception as e:
+            logger.exception(
+                "❌ [ORDER DEFENSE] An error occurred while checking main balance: %s",
+                e
+            )
+            raise
+
+        # Second defensive balance constraint: if 3 or more tickers balance are in the minimum allowed balance, abort execution
+        try:
+            tickers_balances = load_json_file(TICKERS_BALANCES_LIVE)
+            minimun_ticker_threshold = load_json_file(CONFIG_LIVE_FILE).get("minumum_bet", 0.05)
+            tickers_below_threshold = [
+                ticker for ticker, balance in tickers_balances.items()
+                if balance <= minimun_ticker_threshold
+            ]
+            if len(tickers_below_threshold) >= 3:
+                logger.error(
+                    "⚠️ [ORDER DEFENSE] %d or more tickers reach the "
+                    "allowed threshold. Aborting execution.",
+                    len(tickers_below_threshold)
+                )
+                raise RuntimeError(
+                    f"{len(tickers_below_threshold)} or more tickers are below the "
+                    f"allowed threshold. Aborting execution."
+                )
+        except Exception as e:
+            logger.exception(
+                "❌ [ORDER DEFENSE] An error occurred while checking tickers balances: %s",
+                e
+            )
+            raise
+
+        # third defensive balance constraint: if the last change date is more than max_days_without_change, abort execution
+        try:
+            last_change_date_str = load_json_file(CONFIG_LIVE_FILE).get("last_change_date", "2026-09-12T00:00:00Z")
+            last_change_date = datetime.fromisoformat(last_change_date_str.replace("Z", "+00:00"))
+            max_days_without_change = load_json_file(CONFIG_LIVE_FILE).get("max_days_without_change", 200)
+            days_since_last_change = (datetime.now(timezone.utc) - last_change_date).days
+
+            if days_since_last_change > max_days_without_change:
+                logger.error(
+                    "⚠️ [ORDER DEFENSE] The last change date is more than %d days old. Aborting execution.",
+                    max_days_without_change
+                )
+                raise RuntimeError(
+                    f"The last change date is more than {max_days_without_change} days old. Aborting execution."
+                )
+        except Exception as e:
+            logger.exception(
+                "❌ [ORDER DEFENSE] An error occurred while checking the last change date: %s",
+                e
             )
             raise
 

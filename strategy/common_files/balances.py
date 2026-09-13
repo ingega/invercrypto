@@ -120,7 +120,7 @@ class LiveUpdateBalances:
                     logger.exception("❌ [MAIN BALANCE] main_balance could not be retrieved from %s",
                                      LIVE_BALANCES)
                     raise
-            
+
             balances[balance_key] = new_balance
             save_json_file(
                 LIVE_BALANCES,
