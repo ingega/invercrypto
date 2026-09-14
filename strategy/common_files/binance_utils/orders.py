@@ -760,8 +760,8 @@ class CreateOrderManager:
             tickers_balances = load_json_file(TICKERS_BALANCES_LIVE)
             minimun_ticker_threshold = load_json_file(CONFIG_LIVE_FILE).get("minumum_bet", 0.05)
             tickers_below_threshold = [
-                ticker for ticker, balance in tickers_balances.items()
-                if balance <= minimun_ticker_threshold
+                ticker for ticker, data in tickers_balances.items()
+                if isinstance(data, dict) and data.get("actual_balance", 0.0) <= minimun_ticker_threshold
             ]
             if len(tickers_below_threshold) >= 3:
                 logger.error(
