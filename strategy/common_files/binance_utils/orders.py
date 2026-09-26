@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict
 import aiohttp
@@ -947,10 +947,12 @@ async def synchronize_orders(
                 )
 
             if order["status"] == "FILLED":
+                execution = await GetOrders(client).get_order_execution(symbol=symbol, order_id=order_id)
                 output = {
-                        "price": float(order.get("avgPrice")),
-                        "quantity": float(order.get("executedQty"))
-                        }
+                    "price": float(order.get("avgPrice")),
+                    "quantity": float(order.get("executedQty")),
+                    "commission": float(execution.get("commission", 0)),
+                }
                 logger.info(f"✓ Order {order_id} synchronized ")
                 return output
             else:

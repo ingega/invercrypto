@@ -459,7 +459,8 @@ async def recover_from_existing_order(
         # Only in this case should we continue looking at TP/SL.
         # -------------------------------------------------------------
 
-        if status != "FILLED":
+        if status != "FILLED" or not (order.get("reduceOnly") 
+                    or order.get("closePosition")):
             logger_live.info(
                 "🔎 [RECOVERY] Existing order is not FILLED | "
                 "operation_id=%s | ticker=%s | "
