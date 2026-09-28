@@ -489,14 +489,14 @@ async def direct_bet_sl_routine(
         client=client
     ).get_order_execution(
         symbol=symbol,
-        order_id=exit_order_id,
+        order_id=entry_order_id,
     )
     if not entry_order_data:
         logger.error(
             "❌ [SL] Could not retrieve execution data | "
             "symbol=%s | order_id=%s",
             symbol,
-            exit_order_id,
+            entry_order_id,
         )
         return
     entry_commission = float(entry_order_data["commission"])
@@ -611,6 +611,23 @@ async def direct_bet_tp_routine(
     # ------------------------------------------------------------------
     # 1. Retrieve FINAL execution information from Binance
     # ------------------------------------------------------------------
+    # the total commission must include the entry order_id commission and exit order_id commission
+    entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
+    entry_order_data = await GetOrders(
+            client=client
+        ).get_order_execution(
+            symbol=symbol,
+            order_id=entry_order_id,
+        )
+    if not entry_order_data:
+        logger.error(
+            "❌ [TP] Could not retrieve execution data | "
+            "symbol=%s | order_id=%s",
+            symbol,
+            entry_order_id,
+        )
+        return
+    entry_commission = float(entry_order_data["commission"])
     order_data = await GetOrders(
         client=client
     ).get_order_execution(
@@ -626,7 +643,8 @@ async def direct_bet_tp_routine(
         )
         return
     pnl = float(order_data["realized_pnl"])
-    commission = float(order_data["commission"])
+    exit_commission = float(order_data["commission"])
+    commission = entry_commission + exit_commission
     # ------------------------------------------------------------------
     # 2. Calculate financial results
     # ------------------------------------------------------------------
