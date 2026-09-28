@@ -186,6 +186,8 @@ async def close_tie_operation(
         )
 
         exit_order_id = close_order["orderId"]
+        # retrieve the operation_id because is needed for the commission calculation
+        operation_id = await query_operation_id(ticker=symbol)
 
         logger.info(
             "🟨 [TIE] Close order submitted | "
@@ -229,6 +231,19 @@ async def close_tie_operation(
             symbol=symbol,
         )
 
+        # commission need the entry order_id as well
+        entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
+        entry_trades = [
+                    trade
+                    for trade in trades
+                    if int(trade["orderId"]) == entry_order_id
+                ]
+        if not entry_trades:
+                    raise RuntimeError(
+                        f"No trade execution found for TIE order | "
+                        f"symbol={symbol} | "
+                        f"order_id={entry_order_id}"
+                    )
         exit_trades = [
             trade
             for trade in trades
@@ -254,11 +269,16 @@ async def close_tie_operation(
             float(trade["realizedPnl"])
             for trade in exit_trades
         )
-
-        commission = sum(
+        entry_commission = sum(
+            float(trade["commission"])
+            for trade in entry_trades
+        )
+        exit_commission = sum(
             float(trade["commission"])
             for trade in exit_trades
         )
+
+        commission = entry_commission + exit_commission
 
         exit_price = (
             sum(
