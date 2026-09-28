@@ -7,6 +7,7 @@ from database import query_algo_id, query_bet_mode ,query_capital, query_operati
 from database import save_live_operation_to_db, save_live_partial_operation_to_db, update_live_complete_operation
 from database import calculate_accumulated_loss, calculate_total_loss, update_live_partial_operation, validate_operation_id
 from database import query_collateral, query_operation_id_unresolved, query_ticker_by_op_id, is_operation_expired
+from database import query_entry_order_id
 from data_classes import CompletedLiveOperation, PartialLiveOperation, UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
 from common_files.balances import LiveUpdateBalances, update_all_balances
 from common_files.binance_utils.orders import bet_execute, synchronize_orders, GetOrders
@@ -478,6 +479,27 @@ async def direct_bet_sl_routine(
     # ------------------------------------------------------------------
     # 1. Retrieve FINAL execution information from Binance
     # ------------------------------------------------------------------
+    # the total commission must include the entry order_id commission and exit order_id commission
+    # therefore we need to retrieve booth orders information, execution plan:
+    # 1. retrieve entry order with operation_id
+    entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
+    # 2. get the commission of the entry order
+    
+    entry_order_data = await GetOrders(
+        client=client
+    ).get_order_execution(
+        symbol=symbol,
+        order_id=exit_order_id,
+    )
+    if not entry_order_data:
+        logger.error(
+            "❌ [SL] Could not retrieve execution data | "
+            "symbol=%s | order_id=%s",
+            symbol,
+            exit_order_id,
+        )
+        return
+    entry_commission = float(entry_order_data["commission"])
     order_data = await GetOrders(
         client=client
     ).get_order_execution(
@@ -493,7 +515,9 @@ async def direct_bet_sl_routine(
         )
         return
     pnl = float(order_data["realized_pnl"])
-    commission = float(order_data["commission"])
+    exit_commission = float(order_data["commission"])
+    # calculates total commission for the operation, including entry and exit
+    commission = entry_commission + exit_commission
     # BEWARE! the exit_order, is the loss order, therefore there's no need to flip
     side = order_data["side"]
     # ------------------------------------------------------------------

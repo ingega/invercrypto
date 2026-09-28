@@ -612,6 +612,36 @@ async def query_operation_id_unresolved():
             "❌ [DATABASE] Failed to query unresolved operations")
         return None
 
+async def query_entry_order_id(
+    operation_id: int,
+    exit_order_id: int
+) -> int | None:
+    """
+    Retrieve entry order_id for a given operation_id and exit_order_id from partial_operations
+    """
+    query = """
+        SELECT
+            order_id
+        FROM partial_operations
+        WHERE operation_id = ?
+        AND exit_order_id = ?;
+    """
+    try:
+        with sqlite3.connect(DB_LIVE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (operation_id, exit_order_id))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return row[0]
+    except sqlite3.Error as e:
+        logger_live.error(
+            f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"
+        )
+        return None
+
+
+
 # --------------- financial queries ------------------------------- #
 
 async def query_capital(operation_id: int) -> float:
