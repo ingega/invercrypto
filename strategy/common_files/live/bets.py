@@ -54,6 +54,60 @@ async def calculate_gain(pnl: float, commission: float, operation_id: int) -> fl
             CONFIG_LIVE_FILE,
         )
 
+
+async def calculate_total_commission(client, operation_id:int, exit_order_id:int, symbol:str) -> float:
+    """
+    Calculates the total commission for an operation, including entry and exit orders.
+    -------------------------------------------
+    params:
+        client: Binance client instance
+        operation_id(int): operation_id of the actual operation
+        exit_order_id(int): order_id of the exit order
+        symbol(str): trading pair symbol
+    execution:
+        1. retrieve entry order_id from database
+        2. retrieve entry commission from Binance
+        3. retrieve exit commission from Binance
+        4. calculate total commission
+    """
+    # 1. retrieve entry order_id
+    entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
+    # 2. get the commission of the entry order
+    entry_order_data = await GetOrders(
+        client=client
+    ).get_order_execution(
+        symbol=symbol,
+        order_id=entry_order_id,
+    )
+    if not entry_order_data:
+        logger.error(
+            "❌ [SL] Could not retrieve execution data | "
+            "symbol=%s | order_id=%s",
+            symbol,
+            entry_order_id,
+        )
+        return
+    entry_commission = float(entry_order_data["commission"])
+    # 3. get the commission of the exit order
+    exit_order_data = await GetOrders(
+        client=client
+    ).get_order_execution(
+        symbol=symbol,
+        order_id=exit_order_id,
+    )
+    if not exit_order_data:
+        logger.error(
+            "❌ [SL] Could not retrieve execution data | "
+            "symbol=%s | order_id=%s",
+            symbol,
+            exit_order_id,
+        )
+        return
+    exit_commission = float(exit_order_data["commission"])
+    total_commission = entry_commission + exit_commission
+    return total_commission
+
+
 # ------------------------------------------------------
 #                secondary bet results
 #-------------------------------------------------------
@@ -499,27 +553,6 @@ async def direct_bet_sl_routine(
     # ------------------------------------------------------------------
     # 1. Retrieve FINAL execution information from Binance
     # ------------------------------------------------------------------
-    # the total commission must include the entry order_id commission and exit order_id commission
-    # therefore we need to retrieve booth orders information, execution plan:
-    # 1. retrieve entry order with operation_id
-    entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
-    # 2. get the commission of the entry order
-    
-    entry_order_data = await GetOrders(
-        client=client
-    ).get_order_execution(
-        symbol=symbol,
-        order_id=entry_order_id,
-    )
-    if not entry_order_data:
-        logger.error(
-            "❌ [SL] Could not retrieve execution data | "
-            "symbol=%s | order_id=%s",
-            symbol,
-            entry_order_id,
-        )
-        return
-    entry_commission = float(entry_order_data["commission"])
     order_data = await GetOrders(
         client=client
     ).get_order_execution(
@@ -535,14 +568,15 @@ async def direct_bet_sl_routine(
         )
         return
     pnl = float(order_data["realized_pnl"])
-    exit_commission = float(order_data["commission"])
-    # calculates total commission for the operation, including entry and exit
-    commission = entry_commission + exit_commission
     # BEWARE! the exit_order, is the loss order, therefore there's no need to flip
     side = order_data["side"]
     # ------------------------------------------------------------------
     # 2. Calculate financial results
     # ------------------------------------------------------------------
+    commission = await calculate_total_commission(client=client, 
+                                                      operation_id=operation_id, 
+                                                      exit_order_id=exit_order_id, 
+                                                      symbol=symbol)
     profit = pnl - commission
     gain = 0.0
     if capital > 0:
@@ -632,22 +666,10 @@ async def direct_bet_tp_routine(
     # 1. Retrieve FINAL execution information from Binance
     # ------------------------------------------------------------------
     # the total commission must include the entry order_id commission and exit order_id commission
-    entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
-    entry_order_data = await GetOrders(
-            client=client
-        ).get_order_execution(
-            symbol=symbol,
-            order_id=entry_order_id,
-        )
-    if not entry_order_data:
-        logger.error(
-            "❌ [TP] Could not retrieve execution data | "
-            "symbol=%s | order_id=%s",
-            symbol,
-            entry_order_id,
-        )
-        return
-    entry_commission = float(entry_order_data["commission"])
+    commission = await calculate_total_commission(client=client,
+                                                  operation_id=operation_id, 
+                                                  exit_order_id=exit_order_id, 
+                                                  symbol=symbol)
     order_data = await GetOrders(
         client=client
     ).get_order_execution(
@@ -663,8 +685,6 @@ async def direct_bet_tp_routine(
         )
         return
     pnl = float(order_data["realized_pnl"])
-    exit_commission = float(order_data["commission"])
-    commission = entry_commission + exit_commission
     # ------------------------------------------------------------------
     # 2. Calculate financial results
     # ------------------------------------------------------------------
@@ -778,8 +798,13 @@ async def verify_bet_result(msg, client, rules_mgr):
     side = event_data.get("S")
     avg_price = float(event_data.get("ap"))
     realized_pnl = float(event_data.get("rp"))
-    commission = float(event_data.get("n"))
-    
+    # the entry order commission must be retrieved, we need operation_id
+    operation_id = await query_operation_id(ticker=symbol)
+    commission = await calculate_total_commission(client=client,
+                                           operation_id=operation_id,
+                                           exit_order_id=exit_order_id,
+                                           symbol=symbol)
+
     # ------------------------------------------------------------------
     # We only care about FILLED orders.
     # ------------------------------------------------------------------
@@ -835,7 +860,7 @@ async def verify_bet_result(msg, client, rules_mgr):
             exit_order_id,
         )
         return
-    tp_algo_id, sl_algo_id = await query_algo_id(operation_id=operation_id) # pyright: ignore[reportGeneralTypeIssues]
+    tp_algo_id, sl_algo_id = await query_algo_id(operation_id=operation_id)
 
     logger.debug(
         "[EVENT DATA] symbol=%s | exit_order_id=%s | "
