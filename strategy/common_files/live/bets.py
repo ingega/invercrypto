@@ -91,6 +91,13 @@ async def calculate_total_commission(client, operation_id:int, exit_order_id:int
     entry_commission = 0
     if entry_order_data is not None and "commission" in entry_order_data:
         entry_commission = float(entry_order_data["commission"])
+    else:
+        logger.debug(
+            "ℹ️ [COMMISSION] No commission data found for exit order | "
+            "symbol=%s | order_id=%d",
+            symbol,
+            entry_order_id,
+        )
     # 3. get the commission of the exit order
     exit_commission = 0
     exit_order_data = await GetOrders(
@@ -102,13 +109,20 @@ async def calculate_total_commission(client, operation_id:int, exit_order_id:int
     if not exit_order_data:
         logger.error(
             "❌ [SL] Could not retrieve execution data | "
-            "symbol=%s | order_id=%s",
+            "symbol=%s | order_id=%d",
             symbol,
             exit_order_id,
         )
         return
     if exit_order_data is not None and "commission" in exit_order_data:
         exit_commission = float(exit_order_data["commission"])
+    else:
+        logger.debug(
+            "ℹ️ [COMMISSION] No commission data found for exit order | "
+            "symbol=%s | order_id=%d",
+            symbol,
+            exit_order_id,
+        )
     total_commission = entry_commission + exit_commission
     return total_commission
 
