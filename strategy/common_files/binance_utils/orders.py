@@ -832,7 +832,11 @@ class CreateOrderManager:
                 "quantity": market_order.get('executedQty'),
                 "timestamp": timestamp
             }
-            logger.info(f"Market order filled: OrderId {market_order.get('orderId')}")
+            try:
+                logger.info(f"Market order filled: OrderId {market_order.get('orderId')}")
+            except Exception as e:
+                logger.error(f"Failed to log market order fill for {symbol}: {e}"
+                             f" value of market_order_data: {market_order_data}")
             timestamp = None
         except Exception as e:
                     logger.error(f"Failed to execute market order trade for {symbol}: {e}")
