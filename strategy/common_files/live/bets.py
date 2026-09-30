@@ -123,6 +123,14 @@ async def calculate_total_commission(client, operation_id:int, exit_order_id:int
             symbol,
             exit_order_id,
         )
+    # before return, inform about all the values
+    logger.info(
+        "ℹ️ [COMMISSION] Commission values | "
+        "symbol=%s | entry_commission=%f | exit_commission=%f",
+        symbol,
+        entry_commission,
+        exit_commission
+    )
     total_commission = entry_commission + exit_commission
     return total_commission
 
