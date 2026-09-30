@@ -929,7 +929,12 @@ async def verify_bet_result(msg, client, rules_mgr):
             )
             return
         elif bet_mode == "I":
-            gain = await calculate_gain(pnl=realized_pnl, commission=commission, operation_id=operation_id)
+            # calculate commission
+            total_commision = await calculate_total_commission(client=client,
+                                                                operation_id=operation_id,
+                                                                exit_order_id=exit_order_id,
+                                                                symbol=symbol)
+            gain = await calculate_gain(pnl=realized_pnl, commission=total_commision, operation_id=operation_id)
             logger.info("[SL RESOLUTION] SL pipeline values: symbol=%s | side=%s | exit_order=%d | "
                         "exit_price=%.6f | gain=%.4f | pnl=%.4f | commision=%.4f | operation_id=%d",
                         symbol,
@@ -938,7 +943,7 @@ async def verify_bet_result(msg, client, rules_mgr):
                         avg_price,
                         gain,
                         realized_pnl,
-                        commission,
+                        total_commision,
                         operation_id)
             await secondary_bet_sl_resolution(
                 client=client,
@@ -949,7 +954,7 @@ async def verify_bet_result(msg, client, rules_mgr):
                 exit_price=avg_price,
                 gain=gain,
                 pnl=realized_pnl,
-                commission=commission,
+                commission=total_commision,
                 operation_id=operation_id
             )
             return
@@ -970,8 +975,13 @@ async def verify_bet_result(msg, client, rules_mgr):
             return
         elif bet_mode == "I":
             # first update the partial record, in order to compute completed totals
+            # calculate total_commission
+            total_commission = await calculate_total_commission(client=client,
+                                                                operation_id=operation_id,
+                                                                exit_order_id=exit_order_id,
+                                                                symbol=symbol)
             # calculate gain
-            tp_gain = await calculate_gain(pnl=realized_pnl, commission=commission, operation_id=operation_id)
+            tp_gain = await calculate_gain(pnl=realized_pnl, commission=total_commission, operation_id=operation_id)
             update_partial_record = UpdatePartialLiveOPeration(
                 exit_order_id=exit_order_id,
                 exit_date=exit_date,
@@ -979,7 +989,7 @@ async def verify_bet_result(msg, client, rules_mgr):
                 outcome='TP',
                 gain=tp_gain,
                 pnl=realized_pnl,
-                commission=commission,
+                commission=total_commission,
                 operation_id=operation_id
             )
             await update_live_partial_operation(update_record=update_partial_record)
