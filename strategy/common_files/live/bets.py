@@ -126,9 +126,11 @@ async def calculate_total_commission(client, operation_id:int, exit_order_id:int
     # before return, inform about all the values
     logger.info(
         "ℹ️ [COMMISSION] Commission values | "
-        "symbol=%s | entry_commission=%f | exit_commission=%f",
+        "symbol=%s | entry_order_id=%d | entry_commission=%f | exit_order_id=%d | exit_commission=%f",
         symbol,
+        entry_order_id,
         entry_commission,
+        exit_order_id,
         exit_commission
     )
     total_commission = entry_commission + exit_commission
@@ -527,22 +529,38 @@ async def bet_time_expiration(operation_id: int) -> bool:
     return await is_operation_expired(operation_id=operation_id, minutes_for_expiration=minutes_allowed)
 
 async def bet_time_expiration_handler(client):
-    unresolved_operation_id = await query_operation_id_unresolved()
-    if unresolved_operation_id is not None:
-        for operation in unresolved_operation_id:
-            result = await bet_time_expiration(operation_id=operation)
-            if result:
-                # retrieve symbol
-                symbol = await query_ticker_by_op_id(operation_id=operation)
-                if symbol is not None:
-                    result = await bet_time_expiration(operation_id=operation)
-                    if result:
-                        # first update the partial record
-                        result = await close_tie_operation(client=client, symbol=symbol)
-                        await update_tie_operation(operation_id=operation, update_record=result)
-                        # finally update and close operation
-                        operation_finished = SecondaryFinalResolution(operation_id=operation, symbol=symbol, outcome="TIE")
-                        await operation_finished.close_operation()
+    unresolved_operations = await query_operation_id_unresolved()
+    if not unresolved_operations:
+        return
+
+    logger.info("🔎 [EXPIRATION MONITOR] Checking %d unresolved operation(s)...", len(unresolved_operations))
+
+    for op in unresolved_operations:
+        # Unpack tuple if necessary
+        operation_id = op[0] if isinstance(op, (tuple, list)) else op
+
+        is_expired = await bet_time_expiration(operation_id=operation_id)
+        if not is_expired:
+            continue
+
+        symbol = await query_ticker_by_op_id(operation_id=operation_id)
+        if symbol is None:
+            logger.error("❌ [EXPIRATION MONITOR] Ticker symbol not found for operation_id=%s", operation_id)
+            continue
+
+        logger.info("⏰ [EXPIRATION MONITOR] Operation %s (%s) expired! Closing TIE operation...", operation_id, symbol)
+
+        # Close position and update DB
+        close_record = await close_tie_operation(client=client, symbol=symbol)
+        await update_tie_operation(operation_id=operation_id, update_record=close_record)
+
+        operation_finished = SecondaryFinalResolution(
+            operation_id=operation_id,
+            symbol=symbol,
+            outcome="TIE"
+        )
+        await operation_finished.close_operation()
+        logger.info("🟢 [EXPIRATION MONITOR] Successfully closed expired operation %s", operation_id)
 
 
 # ------------------------------------------------------
