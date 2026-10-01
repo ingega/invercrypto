@@ -542,6 +542,7 @@ async def bet_time_expiration_handler(client):
         logger.info("⏰ [EXPIRATION MONITOR] Checking operation_id=%s for expiration...", operation_id)
 
         is_expired = await bet_time_expiration(operation_id=operation_id)
+        logger.info("⏰ [EXPIRATION MONITOR] Operation_id=%s expired=%s", operation_id, is_expired)
         if not is_expired:
             continue
 
