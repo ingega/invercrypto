@@ -601,7 +601,7 @@ async def query_operation_id_unresolved():
         with sqlite3.connect(DB_LIVE_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(query)
-            row = cursor.fetchone()
+            row = cursor.fetchall()
             if row is None:
                 return None
             
