@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from database import query_unresolved_operations, query_bet_mode, query_capital, update_completed_operations, update_live_partial_operation
 from data_classes import UpdateCompleteLiveOperation, UpdatePartialLiveOPeration
@@ -547,13 +548,14 @@ def _get_actual_order_id(
 async def recover_from_algo_order(
     client,
     operation: dict,
-) -> dict:
+) -> dict | None:
     """
     Determines which exit algo order was triggered and retrieves
     the corresponding actual Binance order.
 
     This function is only reached when the existing order_id was
-    NOT a FILLED exit order.
+    NOT a FILLED exit order. Returns None when neither algo identifies
+    an exit so recovery can inspect account trade history.
     """
 
     operation_id = operation["operation_id"]
@@ -621,11 +623,14 @@ async def recover_from_algo_order(
         tp_actual_order_id is None
         and sl_actual_order_id is None
     ):
-        raise RecoveryError(
-            f"No recoverable exit order found in TP/SL algo orders | "
-            f"operation_id={operation_id} | "
-            f"ticker={ticker}"
+        logger_live.warning(
+            "⚠️ [RECOVERY] No triggered TP/SL exit ID found; "
+            "checking Binance trade history | operation_id=%s | "
+            "ticker=%s",
+            operation_id,
+            ticker,
         )
+        return None
 
     # -----------------------------------------------------------------
     # Select triggered algo.
@@ -680,6 +685,226 @@ async def recover_from_algo_order(
         "algo_order": selected_algo,
         "exit_order": exit_order,
         "outcome": outcome,
+    }
+
+
+async def recover_from_account_trades(
+    client,
+    operation: dict,
+) -> dict:
+    """Recover a flat operation from its matching Binance entry and exit fills."""
+    operation_id = operation["operation_id"]
+    ticker = operation["ticker"]
+    try:
+        entry_order_id = int(operation["order_id"])
+    except (TypeError, ValueError) as e:
+        raise RecoveryError(
+            f"Invalid entry order ID for operation_id={operation_id}"
+        ) from e
+    entry_side = operation.get("side")
+
+    if entry_side not in ("BUY", "SELL"):
+        raise RecoveryError(
+            f"Invalid entry side for operation_id={operation_id}: "
+            f"{entry_side}"
+        )
+
+    try:
+        entry_date = datetime.fromisoformat(
+            str(operation["entry_date"]).replace("Z", "+00:00")
+        )
+        if entry_date.tzinfo is None:
+            entry_date = entry_date.replace(tzinfo=timezone.utc)
+        start_time = int(entry_date.timestamp() * 1000)
+
+        trades = await client.futures_account_trades(
+            symbol=ticker,
+            startTime=start_time,
+            limit=1000,
+        )
+    except RecoveryError:
+        raise
+    except Exception as e:
+        logger_live.exception(
+            "❌ [RECOVERY] Failed to retrieve Binance trade history | "
+            "operation_id=%s | ticker=%s",
+            operation_id,
+            ticker,
+        )
+        raise RecoveryError(
+            f"Failed to retrieve Binance trade history for "
+            f"operation_id={operation_id}"
+        ) from e
+
+    if not trades:
+        raise RecoveryError(
+            f"No Binance trades found for closed operation | "
+            f"operation_id={operation_id} | ticker={ticker}"
+        )
+
+    entry_trades = [
+        trade
+        for trade in trades
+        if trade.get("symbol") == ticker
+        and str(trade.get("orderId")) == str(entry_order_id)
+        and trade.get("side") == entry_side
+    ]
+
+    if not entry_trades:
+        raise RecoveryError(
+            f"Entry fills not found in Binance trade history | "
+            f"operation_id={operation_id} | "
+            f"entry_order_id={entry_order_id}"
+        )
+
+    try:
+        entry_quantity = sum(
+            (Decimal(str(trade["qty"])) for trade in entry_trades),
+            Decimal(0),
+        )
+        latest_entry_time = max(
+            int(trade["time"])
+            for trade in entry_trades
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as e:
+        raise RecoveryError(
+            f"Invalid entry fill data for operation_id={operation_id}"
+        ) from e
+
+    if entry_quantity <= 0:
+        raise RecoveryError(
+            f"Entry fills have no positive quantity | "
+            f"operation_id={operation_id}"
+        )
+
+    entry_position_sides = {
+        trade.get("positionSide")
+        for trade in entry_trades
+    }
+    if len(entry_position_sides) != 1:
+        raise RecoveryError(
+            f"Inconsistent entry position sides | "
+            f"operation_id={operation_id}"
+        )
+    entry_position_side = next(iter(entry_position_sides))
+
+    exit_side = "SELL" if entry_side == "BUY" else "BUY"
+    exit_trades_by_order: dict[int, list[dict]] = {}
+    for trade in trades:
+        if (
+            trade.get("symbol") != ticker
+            or trade.get("side") != exit_side
+            or trade.get("positionSide") != entry_position_side
+        ):
+            continue
+
+        try:
+            order_id = int(trade["orderId"])
+            trade_time = int(trade["time"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise RecoveryError(
+                f"Invalid exit fill identity in trade history | "
+                f"operation_id={operation_id}"
+            ) from e
+
+        if (
+            order_id == entry_order_id
+            or trade_time < latest_entry_time
+        ):
+            continue
+
+        exit_trades_by_order.setdefault(order_id, []).append(trade)
+
+    quantity_tolerance = max(
+        Decimal("0.000000000001"),
+        entry_quantity * Decimal("0.00000001"),
+    )
+    matching_orders = []
+    for order_id, order_trades in exit_trades_by_order.items():
+        try:
+            exit_quantity = sum(
+                (Decimal(str(trade["qty"])) for trade in order_trades),
+                Decimal(0),
+            )
+        except (KeyError, TypeError, InvalidOperation) as e:
+            raise RecoveryError(
+                f"Invalid exit fill quantity | operation_id={operation_id} | "
+                f"exit_order_id={order_id}"
+            ) from e
+
+        if abs(exit_quantity - entry_quantity) <= quantity_tolerance:
+            matching_orders.append((order_id, order_trades, exit_quantity))
+
+    if len(matching_orders) != 1:
+        raise RecoveryError(
+            "Could not uniquely match a full position close in Binance "
+            "trade history | "
+            f"operation_id={operation_id} | ticker={ticker} | "
+            f"matching_orders={len(matching_orders)}"
+        )
+
+    exit_order_id, exit_trades, exit_quantity = matching_orders[0]
+    recovered_operation = operation.copy()
+    recovered_operation["exit_order_id"] = exit_order_id
+    exit_order = await recover_from_exit_order(
+        client=client,
+        operation=recovered_operation,
+    )
+
+    try:
+        exit_notional = sum(
+            (
+                Decimal(str(trade["price"]))
+                * Decimal(str(trade["qty"]))
+                for trade in exit_trades
+            ),
+            Decimal(0),
+        )
+        pnl = sum(
+            (Decimal(str(trade["realizedPnl"])) for trade in exit_trades),
+            Decimal(0),
+        )
+        commission = sum(
+            (
+                Decimal(str(trade["commission"]))
+                for trade in entry_trades + exit_trades
+            ),
+            Decimal(0),
+        )
+        exit_timestamp = max(
+            int(trade["time"])
+            for trade in exit_trades
+        )
+    except (KeyError, TypeError, ValueError, InvalidOperation) as e:
+        raise RecoveryError(
+            f"Invalid trade execution data | "
+            f"operation_id={operation_id} | "
+            f"exit_order_id={exit_order_id}"
+        ) from e
+
+    trade_summary = {
+        "pnl": float(pnl),
+        "commission": float(commission),
+        "exit_price": float(exit_notional / exit_quantity),
+        "exit_date": datetime.fromtimestamp(
+            exit_timestamp / 1000,
+            tz=timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    logger_live.warning(
+        "🟠 [RECOVERY] Recovered closed position from Binance trades as TIE | "
+        "operation_id=%s | ticker=%s | exit_order_id=%s | "
+        "exit_quantity=%s",
+        operation_id,
+        ticker,
+        exit_order_id,
+        exit_quantity,
+    )
+
+    return {
+        "exit_order": exit_order,
+        "outcome": "TIE",
+        "trade_summary": trade_summary,
     }
 
 
@@ -809,7 +1034,14 @@ async def recover_closed_operation(
         order_id,
     )
 
-    return await recover_from_algo_order(
+    algo_recovery = await recover_from_algo_order(
+        client=client,
+        operation=operation,
+    )
+    if algo_recovery is not None:
+        return algo_recovery
+
+    return await recover_from_account_trades(
         client=client,
         operation=operation,
     )
@@ -1041,30 +1273,37 @@ async def _verify_active_operations_unlocked(
                     exit_order,
                 )
 
-                # -----------------------------------------------------
-                # IMPORTANT:
-                #
-                # We have correctly identified the exit order.
-                #
-                # Your current code does not expose a dedicated
-                # manual-close resolution routine, so we stop here
-                # rather than incorrectly classifying the operation
-                # as TP or SL.
-                #
-                # Add the appropriate manual-close DB resolution here.
-                # -----------------------------------------------------
-                # GetOrders class can retrive the necessary data
-                order_data = GetOrders(client=client)
-                retrieve_data = await order_data.get_order_execution(symbol=ticker, order_id=exit_order)
-                pnl = float(retrieve_data.get("realized_pnl"))
-                commission = float(retrieve_data.get("commission"))
+                trade_summary = recovery_data.get("trade_summary")
+                if trade_summary is None:
+                    order_data = GetOrders(client=client)
+                    retrieve_data = await order_data.get_order_execution(
+                        symbol=ticker,
+                        order_id=exit_order,
+                    )
+                    if not retrieve_data:
+                        raise RecoveryError(
+                            "Could not retrieve TIE execution totals | "
+                            f"operation_id={operation_id} | "
+                            f"exit_order_id={exit_order}"
+                        )
+                    pnl = float(retrieve_data["realized_pnl"])
+                    commission = float(retrieve_data["commission"])
+                    tie_exit_date = datetime.now(
+                        tz=timezone.utc
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                    tie_exit_price = average_price
+                else:
+                    pnl = trade_summary["pnl"]
+                    commission = trade_summary["commission"]
+                    tie_exit_date = trade_summary["exit_date"]
+                    tie_exit_price = trade_summary["exit_price"]
+
                 # update the partial_operation first
                 tie_gain = await calculate_gain(pnl=pnl, commission=commission, operation_id=operation_id)
-                tie_exit_date = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 update_partial_record = UpdatePartialLiveOPeration(
                     exit_order_id=exit_order, 
                     exit_date=tie_exit_date,
-                    exit_price=average_price,
+                    exit_price=tie_exit_price,
                     outcome="TIE",
                     gain=tie_gain,
                     pnl=pnl,

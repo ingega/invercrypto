@@ -204,15 +204,15 @@ class TieExitResult:
 async def close_tie_operation(
     client,
     symbol: str,
-) -> TieExitResult:
+) -> TieExitResult | None:
     """
     Force-closes an active Futures position for a TIE operation.
 
     The position is closed using a reduce-only market order.
     Any remaining open orders for the symbol are then cancelled.
 
-    Returns Binance execution data required to finalize
-    the operation in the database.
+    Returns Binance execution data required to finalize the operation,
+    or None when Binance already reports the position as flat.
     """
 
     try:
@@ -233,16 +233,12 @@ async def close_tie_operation(
         )
 
         if position is None:
-            raise RuntimeError(
-                f"No position information found for {symbol}"
-            )
+            return None
 
         position_amt = float(position["positionAmt"])
 
         if position_amt == 0:
-            raise RuntimeError(
-                f"No active position to close for {symbol}"
-            )
+            return None
 
         # ---------------------------------------------------------
         # 2. Determine closing side
@@ -540,16 +536,11 @@ async def _bet_time_expiration_handler(client):
     if not unresolved_operations:
         return
 
-    logger.info("🔎 [EXPIRATION MONITOR] Checking %d unresolved operation(s) with value: %s", 
-                len(unresolved_operations), unresolved_operations)
-
     for op in unresolved_operations:
         # Unpack tuple if necessary
         operation_id = op[0] if isinstance(op, (tuple, list)) else op
-        logger.info("⏰ [EXPIRATION MONITOR] Checking operation_id=%s for expiration...", operation_id)
 
         is_expired = await bet_time_expiration(operation_id=operation_id)
-        logger.info("⏰ [EXPIRATION MONITOR] Operation_id=%s expired=%s", operation_id, is_expired)
         if not is_expired:
             continue
 
@@ -558,10 +549,11 @@ async def _bet_time_expiration_handler(client):
             logger.error("❌ [EXPIRATION MONITOR] Ticker symbol not found for operation_id=%s", operation_id)
             continue
 
-        logger.info("⏰ [EXPIRATION MONITOR] Operation %s (%s) expired! Closing TIE operation...", operation_id, symbol)
-
         # Close position and update DB
         close_record = await close_tie_operation(client=client, symbol=symbol)
+        if close_record is None:
+            continue
+
         await update_tie_operation(operation_id=operation_id, update_record=close_record)
 
         operation_finished = SecondaryFinalResolution(
