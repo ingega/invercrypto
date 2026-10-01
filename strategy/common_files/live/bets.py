@@ -539,6 +539,7 @@ async def bet_time_expiration_handler(client):
     for op in unresolved_operations:
         # Unpack tuple if necessary
         operation_id = op[0] if isinstance(op, (tuple, list)) else op
+        logger.info("⏰ [EXPIRATION MONITOR] Checking operation_id=%s for expiration...", operation_id)
 
         is_expired = await bet_time_expiration(operation_id=operation_id)
         if not is_expired:
