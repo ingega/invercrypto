@@ -533,7 +533,8 @@ async def bet_time_expiration_handler(client):
     if not unresolved_operations:
         return
 
-    logger.info("🔎 [EXPIRATION MONITOR] Checking %d unresolved operation(s)...", len(unresolved_operations))
+    logger.info("🔎 [EXPIRATION MONITOR] Checking %d unresolved operation(s) with value: %s", 
+                len(unresolved_operations), unresolved_operations)
 
     for op in unresolved_operations:
         # Unpack tuple if necessary
