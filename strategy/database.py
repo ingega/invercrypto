@@ -617,7 +617,8 @@ async def query_entry_order_id(
     exit_order_id: int
 ) -> int | None:
     """
-    Retrieve entry order_id for a given operation_id and exit_order_id from partial_operations
+    Retrieve the entry order for an exit, falling back to the active
+    unresolved entry when the exit has not yet been recorded in the database.
     """
     query = """
         SELECT
@@ -626,14 +627,30 @@ async def query_entry_order_id(
         WHERE operation_id = ?
         AND exit_order_id = ?;
     """
+    unresolved_query = """
+        SELECT order_id
+        FROM partial_operations
+        WHERE operation_id = ?
+          AND outcome = 'UNRESOLVED';
+    """
     try:
         with sqlite3.connect(DB_LIVE_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(query, (operation_id, exit_order_id))
             row = cursor.fetchone()
-            if row is None:
+            if row is not None:
+                return row[0]
+
+            cursor.execute(unresolved_query, (operation_id,))
+            unresolved_rows = cursor.fetchall()
+            if len(unresolved_rows) > 1:
+                raise RuntimeError(
+                    "Multiple unresolved entry orders found for "
+                    f"operation_id={operation_id}"
+                )
+            if not unresolved_rows:
                 return None
-            return row[0]
+            return unresolved_rows[0][0]
     except sqlite3.Error as e:
         logger_live.error(
             f"❌ DATABASE ORDER_ID QUERY FAILURE: {e}"

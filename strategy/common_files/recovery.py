@@ -11,6 +11,7 @@ from common_files.live.bets import direct_bet_tp_routine, direct_bet_sl_routine
 from common_files.live.bets import secondary_bet_sl_resolution, SecondaryFinalResolution
 from common_files.live.bets import calculate_gain
 from common_files.logger import get_logger
+from common_files.live.operation_lock import LIVE_OPERATION_LOCK
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
 
 
@@ -880,7 +881,7 @@ def validate_recovery_operation(
 # =============================================================================
 
 
-async def verify_active_operations(
+async def _verify_active_operations_unlocked(
     client,
     rules_mgr=None,
 ) -> None:
@@ -1272,6 +1273,17 @@ async def verify_active_operations(
             "Unexpected failure during active operation "
             "reconciliation"
         ) from e
+
+
+async def verify_active_operations(
+    client,
+    rules_mgr=None,
+) -> None:
+    async with LIVE_OPERATION_LOCK:
+        await _verify_active_operations_unlocked(
+            client=client,
+            rules_mgr=rules_mgr,
+        )
 
 
 # =============================================================================

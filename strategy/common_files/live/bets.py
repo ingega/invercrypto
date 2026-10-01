@@ -12,6 +12,7 @@ from data_classes import CompletedLiveOperation, PartialLiveOperation, UpdateCom
 from common_files.balances import LiveUpdateBalances, update_all_balances
 from common_files.binance_utils.orders import bet_execute, synchronize_orders, GetOrders
 from common_files.logger import get_logger
+from common_files.live.operation_lock import LIVE_OPERATION_LOCK
 from common_files.paths import load_json_file, CONFIG_LIVE_FILE
 from tangent.filter import scan_tangent_opportunities
 
@@ -94,7 +95,7 @@ async def calculate_total_commission(client, operation_id:int, exit_order_id:int
         entry_commission = 0
         logger.debug(
             "ℹ️ [COMMISSION] No commission data found for exit order | "
-            "symbol=%s | order_id=%d",
+            "symbol=%s | order_id=%s",
             symbol,
             entry_order_id,
         )
@@ -316,17 +317,23 @@ async def close_tie_operation(
 
         # commission need the entry order_id as well
         entry_order_id = await query_entry_order_id(operation_id=operation_id, exit_order_id=exit_order_id)
+        if entry_order_id is None:
+            raise RuntimeError(
+                "No unresolved entry order found for TIE operation | "
+                f"symbol={symbol} | operation_id={operation_id}"
+            )
+
         entry_trades = [
-                    trade
-                    for trade in trades
-                    if int(trade["orderId"]) == entry_order_id
-                ]
+            trade
+            for trade in trades
+            if int(trade["orderId"]) == entry_order_id
+        ]
         if not entry_trades:
-                    raise RuntimeError(
-                        f"No trade execution found for TIE order | "
-                        f"symbol={symbol} | "
-                        f"order_id={entry_order_id}"
-                    )
+            raise RuntimeError(
+                "No trade execution found for TIE entry order | "
+                f"symbol={symbol} | "
+                f"order_id={entry_order_id}"
+            )
         exit_trades = [
             trade
             for trade in trades
@@ -528,7 +535,7 @@ async def bet_time_expiration(operation_id: int) -> bool:
     # returns true or false
     return await is_operation_expired(operation_id=operation_id, minutes_for_expiration=minutes_allowed)
 
-async def bet_time_expiration_handler(client):
+async def _bet_time_expiration_handler(client):
     unresolved_operations = await query_operation_id_unresolved()
     if not unresolved_operations:
         return
@@ -564,6 +571,11 @@ async def bet_time_expiration_handler(client):
         )
         await operation_finished.close_operation()
         logger.info("🟢 [EXPIRATION MONITOR] Successfully closed expired operation %s", operation_id)
+
+
+async def bet_time_expiration_handler(client):
+    async with LIVE_OPERATION_LOCK:
+        await _bet_time_expiration_handler(client)
 
 
 # ------------------------------------------------------
