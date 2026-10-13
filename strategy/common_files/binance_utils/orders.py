@@ -734,8 +734,15 @@ class CreateOrderManager:
         # first defensive balance constraint: if main_blance is below max_loss_balance_percentage, abort execution
         try:
             main_balance = load_json_file(LIVE_BALANCES).get("available_balance", 0.0)
+            # get the max loss percentage allowed
             max_loss_balance_percentage = load_json_file(CONFIG_LIVE_FILE).get("max_loss_balance_percentage", 0.35)
-            min_allowed_balance = main_balance * (1 - max_loss_balance_percentage)
+            # get the initial base balance
+            try:
+                initial_balance = load_json_file(CONFIG_LIVE_FILE).get("initial_balance")
+            except Exception as e:
+                raise RuntimeError(f"An error ocurred during retrieve of the initial balance: {e}")
+            # calculate the minimum allowed balance
+            min_allowed_balance = initial_balance * (1 - max_loss_balance_percentage)
             if main_balance < min_allowed_balance:  
                 logger.error(
                     "⚠️ [ORDER DEFENSE] Main balance %.2f is below the "
