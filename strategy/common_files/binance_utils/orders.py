@@ -453,19 +453,28 @@ class GetOrders:
             # the API can be a bit slow to return trades for a newly filled order. 
             # To mitigate this, I added a small routine to give sometime at the API
             trades = []
-            for i in range(3):
+            max_retries = 3
+            retry_delay = 2.0  # Start with a shorter, safer backoff (e.g., 2s, 4s)
+
+            for i in range(max_retries):
                 trades = await self.client.futures_account_trades(
                     symbol=symbol,
                     orderId=order_id,
                 )
+                
                 if trades:
                     break
-                logger.warning(
-                    "No trades found for order_id=%s on attempt %d. Retrying...",
-                    order_id,
-                    i + 1,
-                )
-                await asyncio.sleep(10)  # Wait before retrying
+                
+                if i < max_retries - 1:  # Don't sleep on the final failed attempt
+                    logger.warning(
+                        "No trades found for order_id=%s on attempt %d/%d. Retrying in %.1fs...",
+                        order_id,
+                        i + 1,
+                        max_retries,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff (2s -> 4s)
 
             logger.debug(
                 "Trades retrieved: "
