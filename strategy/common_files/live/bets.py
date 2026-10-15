@@ -852,10 +852,6 @@ async def verify_bet_result(msg, client, rules_mgr):
     realized_pnl = float(event_data.get("rp"))
     # the entry order commission must be retrieved, we need operation_id
     operation_id = await query_operation_id(ticker=symbol)
-    commission = await calculate_total_commission(client=client,
-                                           operation_id=operation_id,
-                                           exit_order_id=exit_order_id,
-                                           symbol=symbol)
 
     # ------------------------------------------------------------------
     # We only care about FILLED orders.

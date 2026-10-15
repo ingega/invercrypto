@@ -449,11 +449,23 @@ class GetOrders:
                 symbol,
                 order_id,
             )
-
-            trades = await self.client.futures_account_trades(
-                symbol=symbol,
-                orderId=order_id,
-            )
+            # I been working with BInance API since 2020 and I've noticed that sometimes
+            # the API can be a bit slow to return trades for a newly filled order. 
+            # To mitigate this, I added a small routine to give sometime at the API
+            trades = []
+            for i in range(3):
+                trades = await self.client.futures_account_trades(
+                    symbol=symbol,
+                    orderId=order_id,
+                )
+                if trades:
+                    break
+                logger.warning(
+                    "No trades found for order_id=%s on attempt %d. Retrying...",
+                    order_id,
+                    i + 1,
+                )
+                await asyncio.sleep(10)  # Wait before retrying
 
             logger.debug(
                 "Trades retrieved: "
@@ -462,7 +474,7 @@ class GetOrders:
                 order_id,
                 len(trades),
             )
-
+            
             return trades
 
         except Exception:
