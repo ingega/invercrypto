@@ -216,35 +216,57 @@ class SymbolRulesManager:
             )
             raise
 
-    def format_quantity(self, symbol: str, quantity: float) -> float:
+    async def format_quantity(self, symbol: str, quantity: float) -> float:
         rules = self.rules_cache.get(symbol)
 
         if not rules:
             logger.error(
-            "Exchange rules NOT FOUND for symbol=%s. "
-            "Available cached symbols=%d",
-            symbol,
-            len(self.rules_cache),
+                "Exchange rules NOT FOUND for symbol=%s. "
+                "Available cached symbols=%d",
+                symbol,
+                len(self.rules_cache),
             )
             raise ValueError(
                 f"No exchange rules available for {symbol}"
             )
 
+        step_size = rules["step_size"]
+        precision = rules["quantityPrecision"]
+        min_qty = rules.get("min_qty", rules.get("minQty", 0.0))
+        min_notional = rules.get("min_notional", rules.get("minNotional", 0.0))
+
         logger.info(
             "Quantity rules: symbol=%s | "
-            "input=%s | step_size=%s | min_qty=%s | "
+            "input=%s | step_size=%s | min_qty=%s | min_notional=%s | "
             "quantity_precision=%s",
             symbol,
             quantity,
-            rules["step_size"],
-            rules["min_qty"],
-            rules["quantityPrecision"],
+            step_size,
+            min_qty,
+            min_notional,
+            precision,
         )
 
-        step_size = rules["step_size"]
-        precision = rules["quantityPrecision"]
-
+        # 1. Base step factoring
         factored = math.floor(quantity / step_size) * step_size
+
+        # Ensure quantity is at least the exchange minimum quantity
+        if factored < min_qty:
+            factored = min_qty
+
+        # 2. Fetch current price dynamically using self.client (zero function signature changes!)
+        try:
+            ticker_info = await self.client.futures_symbol_ticker(symbol=symbol)
+            current_price = float(ticker_info["price"])
+        except Exception as e:
+            logger.error(f"Failed to fetch current price for {symbol} during quantity formatting: {e}")
+            raise
+
+        # 3. Ensure the factored quantity meets or exceeds the minimum notional (+5% safety buffer)
+        if current_price > 0 and min_notional > 0:
+            target_notional = min_notional * 1.05
+            while (factored * current_price) < target_notional:
+                factored += step_size
 
         return round(factored, precision)
 
@@ -831,7 +853,7 @@ class CreateOrderManager:
             raise
 
         # 1. Format inputs against exchange rules
-        formatted_qty = self.rules_manager.format_quantity(symbol, quantity)
+        formatted_qty = await self.rules_manager.format_quantity(symbol, quantity)
         formatted_sl = self.rules_manager.format_price(symbol, stop_loss_price)
         formatted_tp = self.rules_manager.format_price(symbol, take_profit_price)
         
