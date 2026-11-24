@@ -246,7 +246,6 @@ async def main():
             # -----------------------------------------------------
 
             try:
-
                 await entries_pipeline(
                     client=client,
                     rules_mgr=rules_mgr,

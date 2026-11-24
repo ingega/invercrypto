@@ -106,59 +106,104 @@ def add_entry(ticker:str, side:str, entry_price: float):
     logger.info(f"↩️ record was added to actual bets file with this value"
                 f"{json_bet}")
 
+def calculate_tangent_signal(
+    closes: list[float],
+    separation: int,
+    threshold: float,
+    mvr_threshold: float = -1.0,
+) -> dict | None:
+    """
+    Pure-Python signal & Adaptive MVR evaluator:
+    - MVR <= mvr_threshold: Trend-following (BUY on +, SELL on -)
+    - MVR >  mvr_threshold: Exhaustion Fade (inverts BUY <-> SELL)
+    """
+    if len(closes) < separation + 1:
+        return None
+
+    last_close = closes[-1]
+    fast_base = closes[-1 - separation]
+    if fast_base == 0:
+        return None
+
+    raw_tangent = (last_close - fast_base) / fast_base
+    abs_tangent = abs(raw_tangent)
+
+    if abs_tangent < threshold:
+        return None
+
+    side = "BUY" if raw_tangent >= 0 else "SELL"
+    mvr_value = 0.0
+    regime = "TREND"
+
+    # Compute MVR & apply Adaptive Regime Switch if enabled
+    slow_separation = separation * 4
+    if mvr_threshold > 0 and len(closes) >= slow_separation + 1:
+        slow_base = closes[-1 - slow_separation]
+        if slow_base != 0:
+            abs_tangent_slow = abs((last_close - slow_base) / slow_base)
+            mvr_value = (abs_tangent / abs_tangent_slow) if abs_tangent_slow > 0 else 0.0
+
+            if mvr_value > mvr_threshold:
+                side = "SELL" if side == "BUY" else "BUY"
+                regime = "FADE"
+
+    return {
+        "side": side,
+        "tangent": raw_tangent,
+        "mvr": round(mvr_value, 4),
+        "regime": regime,
+        "entry_price": last_close,
+    }
+
+
 async def scan_tangent_opportunities(live=False):
-    if live == False:
-        config = load_json_file(CONFIG_FILE)
-    else:
-        config = load_json_file(CONFIG_LIVE_FILE)
+    config = load_json_file(CONFIG_LIVE_FILE if live else CONFIG_FILE)
     tickers = load_json_file(TICKERS_FILE)["selected_tickers"]
     separation = config["separation"]
     threshold = config["threshold"]
     interval = config["timeframe"]
-    
+    mvr_threshold = config.get("mvr", -1.0)
+
+    # Fetch 4x separation + 1 bars when MVR is enabled so slow_base is available
+    bars_needed = (separation * 4 + 1) if mvr_threshold > 0 else (separation + 1)
+
     found_opportunities = []
-    
-    print(f"🔎 [PURE SCAN] Scanning tickers: {tickers}")
-    # get direct bets tickers
+    print(f"🔎 [PURE SCAN] Scanning tickers: {tickers} | Adaptive MVR: {mvr_threshold}")
+
     direct_bets = load_json_file(BET_FILE)
     secondary_bets = load_json_file(SECONDARY_BET_FILE)
+
     for ticker in tickers:
-        if live == False:
-            # avoid tickers in actual bet
-            if ticker in direct_bets:
-                continue
-            if ticker in secondary_bets:
-                continue
+        if not live and (ticker in direct_bets or ticker in secondary_bets):
+            continue
         try:
-            # Fetch raw kline information from Binance. Returns a list of lists.
-            # limit parameter requests exactly what we need + a small safety buffer
-            klines = get_bars(ticker=ticker, bars=separation, interval=interval)            
-            # Extract out only the closing price (index 4 in Binance kline array format) 
-            # and map it directly to floats
-            epoch_ms = klines[-1][6] + 1 # last bar close time plus 1 ms
-            entry_date = dt.fromtimestamp(epoch_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
-            last_close = float(klines[-1][4])
-            first_close = float(klines[0][4])
-            # tangent is: last close - first close / first close
-            tangent_value = (last_close - first_close) / first_close
-            entry_price = last_close
-            print(f"values of tangent for {ticker} tangent: {tangent_value}")
-            if tangent_value >= threshold:
-                if live == False:
-                    # add entry in BUY:
-                    add_entry(ticker=ticker, side="BUY", entry_price=entry_price)
-                # add it to the return data
-                data = {"ticker": ticker, "tangent": tangent_value, "side": "BUY"}
-                found_opportunities.append(data)
-            elif tangent_value <= -threshold:
-                if live == False:
-                    # add entry in SELL
-                    add_entry(ticker=ticker, side="SELL", entry_price=entry_price)
-                # add it to the return data
-                data = {"ticker": ticker, "tangent": tangent_value, "side": "SELL"}
-                found_opportunities.append(data)
-                
+            klines = get_bars(ticker=ticker, bars=bars_needed, interval=interval)
+            closes = [float(k[4]) for k in klines]
+
+            signal = calculate_tangent_signal(
+                closes=closes,
+                separation=separation,
+                threshold=threshold,
+                mvr_threshold=mvr_threshold,
+            )
+
+            if signal:
+                print(
+                    f"✅ {ticker} | Side: {signal['side']} ({signal['regime']}) | "
+                    f"Tangent: {signal['tangent']:.4f} | MVR: {signal['mvr']:.4f}"
+                )
+                if not live:
+                    add_entry(ticker=ticker, side=signal["side"], entry_price=signal["entry_price"])
+
+                found_opportunities.append({
+                    "ticker": ticker,
+                    "tangent": signal["tangent"],
+                    "mvr": signal["mvr"],
+                    "regime": signal["regime"],
+                    "side": signal["side"],
+                })
+
         except Exception as e:
             print(f"❌ Error sweeping live REST data for {ticker}: {e}")
-            
+
     return found_opportunities

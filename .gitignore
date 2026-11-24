@@ -32,6 +32,16 @@ db.sqlite
 data/
 __pycache__/
 *.pyc
+*.db
+*.sqlite
 
 # playground for local testing
 strategy/playground.py
+
+# root toml and poetry files
+
+/invercrypto/poetry.lock
+/invercrypto/pyproject.toml
+
+poetry.lock
+pyproject.toml

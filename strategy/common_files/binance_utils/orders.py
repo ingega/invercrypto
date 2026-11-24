@@ -808,7 +808,7 @@ class CreateOrderManager:
         # Second defensive balance constraint: if 3 or more tickers balance are in the minimum allowed balance, abort execution
         try:
             tickers_balances = load_json_file(TICKERS_BALANCES_LIVE)
-            minimun_ticker_threshold = load_json_file(CONFIG_LIVE_FILE).get("minumum_bet", 0.05)
+            minimun_ticker_threshold = load_json_file(CONFIG_LIVE_FILE).get("percentage_loss_threshold", 0.6)
             tickers_below_threshold = [
                 ticker for ticker, data in tickers_balances.items()
                 if isinstance(data, dict) and data.get("actual_balance", 0.0) <= minimun_ticker_threshold
